@@ -68,10 +68,10 @@ export default function PeoplePanel({ me, peers, conn, selectedId, onSelect, onC
   return (
     <aside className="panel">
       <header className="panel-head">
-        <div className="brand">
+        <a href="/" className="brand">
           <Logo />
           <span className="serif">Worldchat</span>
-        </div>
+        </a>
         <span className={`conn conn-${conn}`} title={conn === "online" ? "Connected" : conn === "connecting" ? "Connecting" : "Offline — retrying"}>
           <i /> {conn === "online" ? "Live" : conn === "connecting" ? "Connecting" : "Reconnecting"}
         </span>

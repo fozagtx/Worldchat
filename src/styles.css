@@ -128,7 +128,7 @@ input { font: inherit; color: inherit; }
   animation: rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .panel-head { display: flex; align-items: center; justify-content: space-between; }
-.brand { display: flex; align-items: center; gap: 10px; font-size: 24px; }
+.brand { display: flex; align-items: center; gap: 10px; font-size: 24px; color: inherit; text-decoration: none; }
 .conn { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); padding: 5px 10px; border-radius: 99px; border: 1px solid var(--line); }
 .conn i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .conn-online i { background: var(--green); box-shadow: 0 0 0 3px rgba(94, 127, 79, 0.18); }
