@@ -354,3 +354,4 @@ input { font: inherit; color: inherit; }
   .intro-word { font-size: 44px; height: 52px; }
 }
 @media (max-width: 1180px) { .feed { display: none; } }
+.maplibregl-marker.pin { position: absolute; top: 0; left: 0; }
