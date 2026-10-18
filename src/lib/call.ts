@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Peer, SignalData, Status } from "./protocol";
+import type { Peer, ServerMessage, SignalData } from "./protocol";
 
 export type CallPhase = "idle" | "outgoing" | "incoming" | "connecting" | "active" | "ended";
 
+export const FREE_SECONDS = 300;
+
 export interface CallState {
   phase: CallPhase;
+  source: "direct" | "match";
+  shared: string[];
+  remoteEnded: boolean;
   peer: Peer | null;
   since: number | null;
   reason: string | null;
@@ -13,7 +18,7 @@ export interface CallState {
   remoteVideo: boolean;
 }
 
-const IDLE: CallState = { phase: "idle", peer: null, since: null, reason: null, reconnecting: false, remoteAudio: true, remoteVideo: true };
+const IDLE: CallState = { phase: "idle", source: "direct", shared: [], remoteEnded: false, peer: null, since: null, reason: null, reconnecting: false, remoteAudio: true, remoteVideo: true };
 const RING_MS = 30000;
 const ICE: RTCConfiguration = {
   iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }],
@@ -21,9 +26,9 @@ const ICE: RTCConfiguration = {
 
 interface Deps {
   signal: (to: string, data: SignalData) => boolean;
-  setStatus: (s: Status) => void;
-  onSignal: (h: (from: string, data: SignalData) => void) => () => void;
-  onLeave: (h: (id: string) => void) => () => void;
+  setStatus: (s: "available" | "busy") => void;
+  subscribe: (l: (m: ServerMessage) => void) => () => void;
+  talking: (withId: string) => boolean;
   peers: Peer[];
 }
 
@@ -40,7 +45,7 @@ async function getMedia(): Promise<{ stream: MediaStream | null; error: string |
   }
 }
 
-export function useCall({ signal, setStatus, onSignal, onLeave, peers }: Deps) {
+export function useCall({ signal, setStatus, subscribe, talking, peers }: Deps) {
   const [state, setState] = useState<CallState>(IDLE);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -56,6 +61,7 @@ export function useCall({ signal, setStatus, onSignal, onLeave, peers }: Deps) {
   const pendingIce = useRef<RTCIceCandidateInit[]>([]);
   const ringTimer = useRef<number | undefined>();
   const endTimer = useRef<number | undefined>();
+  const mediaReady = useRef<Promise<void>>(Promise.resolve());
   const peersRef = useRef(peers);
   peersRef.current = peers;
 
@@ -75,8 +81,8 @@ export function useCall({ signal, setStatus, onSignal, onLeave, peers }: Deps) {
   }, []);
 
   const finish = useCallback(
-    (reason: string | null) => {
-      const peer = stateRef.current.peer;
+    (reason: string | null, remoteEnded = false) => {
+      const { peer, source } = stateRef.current;
       cleanup();
       setMediaError(null);
       setStatus("available");
@@ -84,7 +90,7 @@ export function useCall({ signal, setStatus, onSignal, onLeave, peers }: Deps) {
         setState(IDLE);
         return;
       }
-      setState({ ...IDLE, phase: "ended", peer, reason });
+      setState({ ...IDLE, phase: "ended", peer, reason, source, remoteEnded });
       window.clearTimeout(endTimer.current);
       endTimer.current = window.setTimeout(() => setState((s) => (s.phase === "ended" ? IDLE : s)), 3200);
     },
@@ -182,14 +188,52 @@ export function useCall({ signal, setStatus, onSignal, onLeave, peers }: Deps) {
     finish(null);
   }, [signal, finish]);
 
-  const hangup = useCallback(() => {
-    const st = stateRef.current;
-    if (st.peer && callId.current) {
-      const kind = st.phase === "outgoing" ? "cancel" : "hangup";
-      signal(st.peer.id, { kind, callId: callId.current });
-    }
-    finish(st.phase === "active" ? "Call ended" : null);
-  }, [signal, finish]);
+  const hangup = useCallback(
+    (silent = false) => {
+      const st = stateRef.current;
+      if (st.peer && callId.current) {
+        const kind = st.phase === "outgoing" ? "cancel" : "hangup";
+        signal(st.peer.id, { kind, callId: callId.current });
+      }
+      finish(st.phase === "active" && !silent ? "Call ended" : null);
+    },
+    [signal, finish],
+  );
+
+  const startMatched = useCallback(
+    (peer: Peer, id: string, role: "offer" | "answer", shared: string[]) => {
+      const st = stateRef.current;
+      if (st.phase !== "idle" && st.phase !== "ended") {
+        signal(peer.id, { kind: "hangup", callId: id });
+        return;
+      }
+      window.clearTimeout(endTimer.current);
+      setMediaError(null);
+      callId.current = id;
+      setState({ ...IDLE, phase: "connecting", peer, source: "match", shared });
+      mediaReady.current = (async () => {
+        const { stream, error } = await getMedia();
+        if (callId.current !== id) {
+          stream?.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        if (error) setMediaError(`${error} You can still see and hear them.`);
+        local.current = stream;
+        setLocalStream(stream);
+        setCamOn(!!stream?.getVideoTracks().length);
+      })();
+      if (role === "offer") {
+        void mediaReady.current.then(async () => {
+          if (callId.current !== id) return;
+          const conn = buildPc(peer.id);
+          const offer = await conn.createOffer();
+          await conn.setLocalDescription(offer);
+          signal(peer.id, { kind: "offer", callId: id, sdp: offer });
+        });
+      }
+    },
+    [signal, buildPc],
+  );
 
   const sendMedia = useCallback(
     (audio: boolean, video: boolean) => {
@@ -215,9 +259,8 @@ export function useCall({ signal, setStatus, onSignal, onLeave, peers }: Deps) {
     sendMedia(!!local.current?.getAudioTracks()[0]?.enabled, t.enabled);
   }, [sendMedia]);
 
-  useEffect(
-    () =>
-      onSignal(async (from, data) => {
+  const onSignal = useCallback(
+    async (from: string, data: SignalData) => {
         const st = stateRef.current;
         if (data.kind === "ring") {
           const peer = peersRef.current.find((p) => p.id === from);
@@ -248,6 +291,8 @@ export function useCall({ signal, setStatus, onSignal, onLeave, peers }: Deps) {
             break;
           }
           case "offer": {
+            await mediaReady.current;
+            if (data.callId !== callId.current) return;
             const conn = pc.current ?? buildPc(from);
             await conn.setRemoteDescription(data.sdp);
             await flushIce();
@@ -274,24 +319,45 @@ export function useCall({ signal, setStatus, onSignal, onLeave, peers }: Deps) {
             finish(st.phase === "incoming" ? `Missed call from ${st.peer?.name}` : null);
             break;
           case "hangup":
-            finish("Call ended");
+            finish(st.source === "match" ? "They skipped" : "Call ended", true);
             break;
         }
-      }),
-    [onSignal, signal, buildPc, finish],
+    },
+    [signal, buildPc, finish],
   );
 
   useEffect(
     () =>
-      onLeave((id) => {
-        const st = stateRef.current;
-        if (st.peer?.id === id && st.phase !== "idle" && st.phase !== "ended") finish(`${st.peer.name} went offline`);
+      subscribe((m) => {
+        if (m.type === "signal") void onSignal(m.from, m.data);
+        else if (m.type === "matched") startMatched(m.peer, m.callId, m.role, m.shared);
+        else if (m.type === "leave" || m.type === "signal-error") {
+          const id = m.type === "leave" ? m.id : m.to;
+          const st = stateRef.current;
+          if (st.peer?.id === id && st.phase !== "idle" && st.phase !== "ended") finish(`${st.peer.name} went offline`, true);
+        }
       }),
-    [onLeave, finish],
+    [subscribe, onSignal, startMatched, finish],
   );
+
+  const talked = useRef<string | null>(null);
+  useEffect(() => {
+    if (state.phase !== "active" || !state.peer || !state.since) return;
+    if (talked.current !== callId.current) {
+      talked.current = callId.current;
+      talking(state.peer.id);
+    }
+    const left = state.since + FREE_SECONDS * 1000 - Date.now();
+    const t = window.setTimeout(() => {
+      const st = stateRef.current;
+      if (st.peer && callId.current) signal(st.peer.id, { kind: "hangup", callId: callId.current });
+      finish(`Time's up — calls last ${FREE_SECONDS / 60} minutes`);
+    }, Math.max(0, left));
+    return () => window.clearTimeout(t);
+  }, [state.phase, state.peer, state.since, talking, signal, finish]);
 
   useEffect(() => () => cleanup(), [cleanup]);
 
   const hasCam = !!localStream?.getVideoTracks().length;
-  return { state, localStream, remoteStream, micOn, camOn, hasCam, mediaError, clearMediaError: () => setMediaError(null), call, accept, decline, hangup, toggleMic, toggleCam };
+  return { state, localStream, remoteStream, micOn, camOn, hasCam, mediaError, clearMediaError: () => setMediaError(null), call, startMatched, accept, decline, hangup, toggleMic, toggleCam };
 }

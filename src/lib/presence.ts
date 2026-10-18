@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Peer, Profile, ServerMessage, SignalData, Status } from "./protocol";
+import type { ActivityEvent, Peer, Profile, ServerMessage, SignalData, Status } from "./protocol";
 
 export type ConnState = "connecting" | "online" | "offline";
-type SignalHandler = (from: string, data: SignalData) => void;
+export type Listener = (msg: ServerMessage) => void;
 
 function wsUrl() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -13,9 +13,11 @@ export function usePresence(profile: Profile | null) {
   const [selfId, setSelfId] = useState<string | null>(null);
   const [peers, setPeers] = useState<Record<string, Peer>>({});
   const [conn, setConn] = useState<ConnState>("connecting");
+  const [activity, setActivity] = useState<ActivityEvent[]>([]);
+  const [queued, setQueued] = useState<Record<string, number>>({});
+  const [knocks, setKnocks] = useState<{ count: number; names: string[] }>({ count: 0, names: [] });
   const wsRef = useRef<WebSocket | null>(null);
-  const handlers = useRef(new Set<SignalHandler>());
-  const leaveHandlers = useRef(new Set<(id: string) => void>());
+  const listeners = useRef(new Set<Listener>());
   const profileRef = useRef(profile);
   profileRef.current = profile;
 
@@ -53,6 +55,7 @@ export function usePresence(profile: Profile | null) {
           case "welcome":
             setSelfId(msg.id);
             setPeers(Object.fromEntries(msg.peers.map((p) => [p.id, p])));
+            setActivity((msg.activity ?? []).slice().reverse());
             setConn("online");
             break;
           case "join":
@@ -65,20 +68,41 @@ export function usePresence(profile: Profile | null) {
               delete next[msg.id];
               return next;
             });
-            leaveHandlers.current.forEach((h) => h(msg.id));
+            setQueued((q) => {
+              if (!(msg.id in q)) return q;
+              const n = { ...q };
+              delete n[msg.id];
+              return n;
+            });
             break;
-          case "signal":
-            handlers.current.forEach((h) => h(msg.from, msg.data));
+          case "activity":
+            setActivity((a) => [msg.event, ...a].slice(0, 25));
             break;
-          case "signal-error":
-            leaveHandlers.current.forEach((h) => h(msg.to));
+          case "queued":
+            setQueued((q) => ({ ...q, [msg.to]: msg.position }));
+            break;
+          case "your-turn":
+          case "queue-closed": {
+            const id = msg.type === "your-turn" ? msg.peer.id : msg.to;
+            setQueued((q) => {
+              const n = { ...q };
+              delete n[id];
+              return n;
+            });
+            break;
+          }
+          case "knocks":
+            setKnocks({ count: msg.count, names: msg.names });
             break;
         }
+        listeners.current.forEach((l) => l(msg));
       };
       ws.onclose = () => {
         if (wsRef.current === ws) wsRef.current = null;
         setSelfId(null);
         setPeers({});
+        setQueued({});
+        setKnocks({ count: 0, names: [] });
         if (closed) return;
         setConn("offline");
         retry += 1;
@@ -92,7 +116,6 @@ export function usePresence(profile: Profile | null) {
       wsRef.current?.close();
       wsRef.current = null;
     };
-    // reconnect only when going from no profile to a profile
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [!!profile]);
 
@@ -101,16 +124,29 @@ export function usePresence(profile: Profile | null) {
   }, [profile, raw]);
 
   const signal = useCallback((to: string, data: SignalData) => raw({ type: "signal", to, data }), [raw]);
-  const setStatus = useCallback((status: Status) => raw({ type: "status", status }), [raw]);
-  const onSignal = useCallback((h: SignalHandler) => {
-    handlers.current.add(h);
-    return () => void handlers.current.delete(h);
-  }, []);
-  const onLeave = useCallback((h: (id: string) => void) => {
-    leaveHandlers.current.add(h);
-    return () => void leaveHandlers.current.delete(h);
+  const setStatus = useCallback((status: Exclude<Status, "matching">) => raw({ type: "status", status }), [raw]);
+  const match = useCallback(() => raw({ type: "match" }), [raw]);
+  const unmatch = useCallback(() => raw({ type: "unmatch" }), [raw]);
+  const knock = useCallback((to: string) => raw({ type: "knock", to }), [raw]);
+  const unknock = useCallback(
+    (to: string) => {
+      setQueued((q) => {
+        const n = { ...q };
+        delete n[to];
+        return n;
+      });
+      return raw({ type: "unknock", to });
+    },
+    [raw],
+  );
+  const talking = useCallback((withId: string) => raw({ type: "talking", with: withId }), [raw]);
+  const subscribe = useCallback((l: Listener) => {
+    listeners.current.add(l);
+    return () => void listeners.current.delete(l);
   }, []);
 
-  const others = Object.values(peers).filter((p) => p.id !== selfId);
-  return { selfId, peers: others, conn, signal, setStatus, onSignal, onLeave };
+  const all = Object.values(peers);
+  const me = selfId ? peers[selfId] ?? null : null;
+  const others = all.filter((p) => p.id !== selfId);
+  return { selfId, me, peers: others, conn, activity, queued, knocks, signal, setStatus, match, unmatch, knock, unknock, talking, subscribe };
 }

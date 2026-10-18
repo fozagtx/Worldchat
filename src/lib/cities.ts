@@ -1,4 +1,4 @@
-export interface City { city: string; country: string; lat: number; lng: number; tz: string }
+export interface City { city: string; country: string; cc: string; lat: number; lng: number; tz: string }
 
 // [city, country, lat, lng, tz]
 const RAW: [string, string, number, number, string][] = [
@@ -86,7 +86,13 @@ const RAW: [string, string, number, number, string][] = [
   ["Zurich", "Switzerland", 47.38, 8.54, "Europe/Zurich"],
 ];
 
-export const CITIES: City[] = RAW.map(([city, country, lat, lng, tz]) => ({ city, country, lat, lng, tz }));
+const CC: Record<string, string> = {"Nigeria": "NG", "Ghana": "GH", "Ethiopia": "ET", "Netherlands": "NL", "Greece": "GR", "United States": "US", "New Zealand": "NZ", "Thailand": "TH", "Spain": "ES", "China": "CN", "India": "IN", "Germany": "DE", "Colombia": "CO", "Argentina": "AR", "Egypt": "EG", "South Africa": "ZA", "Morocco": "MA", "Denmark": "DK", "Senegal": "SN", "Tanzania": "TZ", "Bangladesh": "BD", "United Arab Emirates": "AE", "Ireland": "IE", "Finland": "FI", "Vietnam": "VN", "Hong Kong": "HK", "T\u00fcrkiye": "TR", "Indonesia": "ID", "Pakistan": "PK", "Uganda": "UG", "Rwanda": "RW", "DR Congo": "CD", "Malaysia": "MY", "Peru": "PE", "Portugal": "PT", "United Kingdom": "GB", "Philippines": "PH", "Australia": "AU", "Mexico": "MX", "Italy": "IT", "Canada": "CA", "Russia": "RU", "Kenya": "KE", "Japan": "JP", "Norway": "NO", "France": "FR", "Czechia": "CZ", "Iceland": "IS", "Saudi Arabia": "SA", "Brazil": "BR", "Chile": "CL", "South Korea": "KR", "Singapore": "SG", "Sweden": "SE", "Taiwan": "TW", "Iran": "IR", "Tunisia": "TN", "Austria": "AT", "Poland": "PL", "Switzerland": "CH"};
+
+export const CITIES: City[] = RAW.map(([city, country, lat, lng, tz]) => ({ city, country, cc: CC[country] ?? "", lat, lng, tz }));
+
+export function cityForTz(tz: string): City {
+  return CITIES.find((c) => c.tz === tz) ?? CITIES.find((c) => c.tz.split("/")[0] === tz.split("/")[0]) ?? CITIES.find((c) => c.city === "London")!;
+}
 
 export function searchCities(q: string, limit = 6): City[] {
   const s = q.trim().toLowerCase();

@@ -3,11 +3,9 @@ import { geoEquirectangular, geoGraticule10, geoInterpolate, geoOrthographic, ge
 import { feature } from "topojson-client";
 import land110 from "world-atlas/land-110m.json";
 import type { Peer, Profile } from "../lib/protocol";
-import { initials } from "../lib/profile";
+import { avatarUrl } from "../lib/identity";
 
-export interface GlobeHandle {
-  focus: (lat: number, lng: number) => void;
-}
+import type { GlobeHandle } from "./MapGlobe";
 
 interface Props {
   me: Profile | null;
@@ -16,7 +14,8 @@ interface Props {
   arcTo: Peer | null;
   offsetX: number;
   offsetY: number;
-  onSelect: (id: string) => void;
+  revealed?: boolean;
+  onSelect: (id: string | null) => void;
 }
 
 type Dot = [number, number, number, number, number]; // lng, lat, x, y, z (unit vector)
@@ -52,7 +51,9 @@ function buildDots(): Dot[] {
   return dots;
 }
 
-const Globe = forwardRef<GlobeHandle, Props>(function Globe({ me, peers, selectedId, arcTo, offsetX, offsetY, onSelect }, ref) {
+const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me, peers, selectedId, arcTo, offsetX, offsetY, revealed = true, onSelect }, ref) {
+  const grow = useRef({ t0: 0, on: false });
+  if (revealed && !grow.current.on) grow.current = { t0: performance.now(), on: true };
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const markers = useRef(new Map<string, HTMLButtonElement>());
@@ -98,6 +99,8 @@ const Globe = forwardRef<GlobeHandle, Props>(function Globe({ me, peers, selecte
 
     const frame = (now: number) => {
       const { me, peers, arcTo, offsetX, offsetY } = props.current;
+      const gk = grow.current.on ? Math.min(1, (now - grow.current.t0) / 2200) : 0;
+      const scale = 0.04 + 0.96 * (1 - Math.pow(1 - gk, 4));
       if (anim.current) {
         const k = Math.min(1, (now - anim.current.t0) / 1100);
         const e = 1 - Math.pow(1 - k, 3);
@@ -108,7 +111,7 @@ const Globe = forwardRef<GlobeHandle, Props>(function Globe({ me, peers, selecte
         rot.current = [rot.current[0] + 0.035, rot.current[1]];
       }
       const availW = w - offsetX, availH = h - offsetY;
-      const r = Math.max(120, Math.min(availW, availH) * 0.4) * zoom.current;
+      const r = Math.max(20, Math.min(availW, availH) * 0.4 * zoom.current * scale);
       const cx = offsetX + availW / 2, cy = availH / 2;
       proj.scale(r).translate([cx, cy]).rotate([rot.current[0], rot.current[1], 0]);
 
@@ -220,32 +223,33 @@ const Globe = forwardRef<GlobeHandle, Props>(function Globe({ me, peers, selecte
   };
 
   return (
-    <div ref={wrap} className="globe" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onWheel={onWheel}>
+    <div ref={wrap} className="globe" onClick={() => onSelect(null)} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onWheel={onWheel}>
       <canvas ref={canvas} aria-label="Globe of people online" />
       {me && (
-        <button ref={setRef("me")} className="marker marker-me" style={{ ["--c" as string]: me.color }} tabIndex={-1} aria-label="You">
-          <span className="marker-dot">{initials(me.name)}</span>
-          <span className="marker-tag">You</span>
+        <button ref={setRef("me")} className="pin pin-me fb" tabIndex={-1} aria-label="You">
+          <img className="pin-face" src={avatarUrl(me.avatar)} alt="" draggable={false} />
+          <span className="pin-label">You</span>
         </button>
       )}
       {peers.map((p) => (
         <button
           key={p.id}
           ref={setRef(p.id)}
-          className={`marker ${selectedId === p.id ? "is-selected" : ""} ${p.status === "busy" ? "is-busy" : ""}`}
-          style={{ ["--c" as string]: p.color }}
-          onClick={() => onSelect(p.id)}
+          className={`pin fb ${selectedId === p.id ? "is-selected" : ""} ${p.status === "busy" ? "is-busy" : ""} ${p.status === "matching" ? "is-matching" : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect(p.id);
+          }}
           aria-label={`${p.name} in ${p.city}`}
         >
-          <span className="marker-ring" />
-          <span className="marker-dot">{initials(p.name)}</span>
-          <span className="marker-tag">
-            {p.name} · {p.city}
-          </span>
+          <span className="pin-pulse" />
+          <img className="pin-face" src={avatarUrl(p.avatar)} alt="" draggable={false} />
+          <span className="pin-dot" />
+          <span className="pin-label">{p.status === "busy" ? `${p.name} · talking` : `${p.name} · ${p.city}`}</span>
         </button>
       ))}
     </div>
   );
 });
 
-export default Globe;
+export default FallbackGlobe;

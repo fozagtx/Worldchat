@@ -17,3 +17,6 @@ export const Logo = () => (
     <path d="M3 16h26M5.5 9h21M5.5 23h21" stroke="#f4ede3" strokeWidth="1.6" />
   </svg>
 );
+export const Expand = () => (<svg {...base} width={16} height={16}><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" /></svg>);
+export const Shrink = () => (<svg {...base} width={16} height={16}><path d="M4 14h6v6M20 10h-6V4M10 14l-7 7M14 10l7-7" /></svg>);
+export const Next = () => (<svg {...base} width={16} height={16}><path d="M5 5l9 7-9 7zM18 5v14" /></svg>);

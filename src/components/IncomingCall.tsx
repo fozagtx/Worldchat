@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import type { Peer, Profile } from "../lib/protocol";
 import { distanceKm, formatKm, localTime } from "../lib/geo";
 import Avatar from "./Avatar";
+import Flag from "./Flag";
 import { Phone, PhoneDown } from "./icons";
 
 function useRingtone() {
@@ -49,13 +50,13 @@ export default function IncomingCall({ me, peer, onAccept, onDecline }: { me: Pr
   return (
     <div className="incoming" role="alertdialog" aria-label={`Incoming call from ${peer.name}`}>
       <div className="pulse ringing">
-        <Avatar name={peer.name} color={peer.color} size={52} />
+        <Avatar seed={peer.avatar} size={52} />
       </div>
       <div className="incoming-meta">
         <span className="mono tiny">INCOMING CALL</span>
         <strong className="serif">{peer.name}</strong>
         <span className="muted">
-          {peer.city} · {localTime(peer.tz)} · {formatKm(distanceKm(me.lat, me.lng, peer.lat, peer.lng))}
+          <Flag cc={peer.cc} /> {peer.city} · {localTime(peer.tz)} · {formatKm(distanceKm(me.lat, me.lng, peer.lat, peer.lng))}
         </span>
       </div>
       <div className="incoming-actions">
