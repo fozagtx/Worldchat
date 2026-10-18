@@ -89,7 +89,7 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
     focus(lat, lng) {
       idleUntil.current = performance.now() + 9000;
       // BFCM-style: swoop in and tilt so the person sits on the horizon
-      map.current?.flyTo({ center: [lng, lat - 4], zoom: Math.max(map.current.getZoom(), 2.6), pitch: 38, bearing: 0, duration: 1800, curve: 1.6, essential: true });
+      map.current?.flyTo({ center: [lng, lat - 3], zoom: Math.max(map.current.getZoom(), 2.6), pitch: 32, bearing: 0, duration: 1800, curve: 1.6, essential: true });
     },
   }));
 
@@ -124,7 +124,9 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
       }
       mk.setLngLat([w.lng, w.lat]);
       const el = mk.getElement();
-      el.className = `pin ${w.cls}${id === "me" ? " pin-me" : ""}`;
+      el.classList.remove("is-busy", "is-matching", "is-selected", "pin-me");
+      el.classList.add("pin", ...w.cls.split(/\s+/).filter(Boolean));
+      if (id === "me") el.classList.add("pin-me");
       const img = el.querySelector<HTMLImageElement>(".pin-face")!;
       const src = avatarUrl(w.seed);
       if (img.src !== src) img.src = src;
@@ -165,6 +167,9 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
         renderWorldCopies: false,
       });
       map.current = m;
+      const ro = new ResizeObserver(() => m.resize());
+      ro.observe(box.current);
+      m.once("remove", () => ro.disconnect());
       m.on("load", () => {
         m.addSource("arc", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } } });
         m.addLayer({ id: "arc", type: "line", source: "arc", paint: { "line-color": "#b5602f", "line-width": 2.2, "line-dasharray": [1.5, 1.5] }, layout: { "line-cap": "round" } });
