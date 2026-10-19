@@ -246,14 +246,14 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
       const ensureLiveArcs = () => {
         if (!m.getSource("live-arcs")) m.addSource("live-arcs", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         const glow = latest.current.theme === "radio-blue" ? "#8b5cf6" : "#c9783f";
-        const core = latest.current.theme === "radio-blue" ? "#c4b5fd" : "#c9783f";
+        const core = latest.current.theme === "radio-blue" ? "#ddd6fe" : "#b5602f";
         if (!m.getLayer("live-arcs-glow")) {
           m.addLayer({
             id: "live-arcs-glow",
             type: "line",
             source: "live-arcs",
             layout: { "line-cap": "round", "line-join": "round" },
-            paint: { "line-color": glow, "line-width": 10, "line-blur": 8, "line-opacity": ["*", ["get", "opacity"], 0.6] },
+            paint: { "line-color": glow, "line-width": 12, "line-blur": 6, "line-opacity": ["*", ["get", "opacity"], 0.85] },
           });
         }
         if (!m.getLayer("live-arcs-core")) {
@@ -262,7 +262,7 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
             type: "line",
             source: "live-arcs",
             layout: { "line-cap": "round", "line-join": "round" },
-            paint: { "line-color": core, "line-width": 2.2, "line-opacity": ["get", "opacity"] },
+            paint: { "line-color": core, "line-width": 3, "line-opacity": ["get", "opacity"] },
           });
         }
       };
