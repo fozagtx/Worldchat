@@ -40,7 +40,7 @@ export default function ThemePicker({ theme, onChange }: { theme: ThemeId; onCha
           </button>
           <button className={`theme-choice ${theme === "radio-blue" ? "selected" : ""}`} type="button" aria-pressed={theme === "radio-blue"} onClick={() => changeTheme("radio-blue")}>
             <span className="theme-preview theme-preview-blue"><i /></span>
-            <span className="theme-choice-copy"><b>Radio Blue</b><small>Theme of the week</small></span>
+            <span className="theme-choice-copy"><b>Night</b><small>Theme of the week · dark</small></span>
             <span className="theme-week">WEEKLY</span>
           </button>
         </section>

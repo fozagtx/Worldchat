@@ -166,15 +166,15 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
       ctx.fill();
 
       const g = ctx.createRadialGradient(cx - r * 0.35, cy - r * 0.4, r * 0.1, cx, cy, r);
-      g.addColorStop(0, radioBlue ? "#23305f" : "#fffaf2");
-      g.addColorStop(0.7, radioBlue ? "#101a42" : "#f3e8d8");
-      g.addColorStop(1, radioBlue ? "#07102f" : "#e7d6bf");
+      g.addColorStop(0, radioBlue ? "#252a36" : "#fffaf2");
+      g.addColorStop(0.7, radioBlue ? "#171b25" : "#f3e8d8");
+      g.addColorStop(1, radioBlue ? "#10131c" : "#e7d6bf");
       ctx.fillStyle = g;
       ctx.beginPath();
       path({ type: "Sphere" });
       ctx.fill();
 
-      ctx.strokeStyle = radioBlue ? "rgba(255,255,255,0.13)" : "rgba(120,84,55,0.05)";
+      ctx.strokeStyle = radioBlue ? "rgba(255,255,255,0.11)" : "rgba(120,84,55,0.05)";
       ctx.lineWidth = 1;
       ctx.beginPath();
       path(graticule);
@@ -189,12 +189,12 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
         if (dot <= 0.02) continue;
         const p = proj([d[0], d[1]]);
         if (!p) continue;
-        ctx.fillStyle = radioBlue ? `rgba(92,255,138,${0.48 + dot * 0.5})` : `rgba(122,82,52,${0.22 + dot * 0.55})`;
+        ctx.fillStyle = radioBlue ? `rgba(92,255,138,${0.25 + dot * 0.3})` : `rgba(122,82,52,${0.22 + dot * 0.55})`;
         const s = (radioBlue ? 1.3 + dot * 1.25 : 0.9 + dot * 1.1) * ds;
         ctx.fillRect(p[0] - s / 2, p[1] - s / 2, s, s);
       }
 
-      ctx.strokeStyle = radioBlue ? "rgba(255,255,255,0.26)" : "rgba(122,82,52,0.22)";
+      ctx.strokeStyle = radioBlue ? "rgba(255,255,255,0.15)" : "rgba(122,82,52,0.22)";
       ctx.lineWidth = 1;
       ctx.beginPath();
       path({ type: "Sphere" });

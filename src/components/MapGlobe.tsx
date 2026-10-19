@@ -46,14 +46,14 @@ async function loadStyle(theme: ThemeId): Promise<StyleSpecification> {
     .filter((l) => keep.test(l.id) && !(radioBlue && l.id === "water"))
     .map((l) => {
       const layer = JSON.parse(JSON.stringify(l));
-      if (layer.type === "background") layer.paint = { "background-color": radioBlue ? "#2a12ff" : LAND };
+      if (layer.type === "background") layer.paint = { "background-color": radioBlue ? "#07080d" : LAND };
       if (layer.id === "water") layer.paint = { "fill-color": WATER, "fill-antialias": true };
       if (layer.type === "line") layer.paint = { ...layer.paint, "line-color": radioBlue ? "rgba(255,255,255,0.35)" : "#c8ae92", "line-opacity": 0.85 };
       if (layer.type === "symbol") {
         const water = layer.id.startsWith("water");
         layer.paint = {
-          "text-color": radioBlue ? "#ffffff" : water ? "#a88a6d" : layer.id.startsWith("label_country") ? INK : "#8c6c55",
-          "text-halo-color": radioBlue ? "rgba(5,7,45,0.92)" : water ? WATER : LAND,
+          "text-color": radioBlue ? "rgba(255,255,255,0.85)" : water ? "#a88a6d" : layer.id.startsWith("label_country") ? INK : "#8c6c55",
+          "text-halo-color": radioBlue ? "rgba(7,8,13,0.96)" : water ? WATER : LAND,
           "text-halo-width": radioBlue ? 1.8 : 1.2,
         };
         if (layer.id.startsWith("label_city")) layer.minzoom = 3.2;
@@ -80,7 +80,7 @@ async function loadStyle(theme: ThemeId): Promise<StyleSpecification> {
   }
   style.projection = { type: "globe" };
   style.sky = radioBlue
-    ? { "atmosphere-blend": ["interpolate", ["linear"], ["zoom"], 0, 1, 5, 1, 7, 0], "sky-color": "#2a12ff", "horizon-color": "#2a12ff", "fog-color": "#2a12ff" }
+    ? { "atmosphere-blend": ["interpolate", ["linear"], ["zoom"], 0, 1, 5, 1, 7, 0], "sky-color": "#07080d", "horizon-color": "#0d1530", "fog-color": "#07080d" }
     : { "atmosphere-blend": ["interpolate", ["linear"], ["zoom"], 0, 1, 5, 1, 7, 0], "sky-color": "#f4ede3", "horizon-color": "#efe2cf", "fog-color": "#f4ede3" };
   return style;
 }
