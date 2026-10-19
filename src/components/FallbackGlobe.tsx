@@ -5,7 +5,7 @@ import land110 from "world-atlas/land-110m.json";
 import type { Peer, Profile } from "../lib/protocol";
 import type { ThemeId } from "../lib/theme";
 import { avatarUrl } from "../lib/identity";
-import { bridgeArc, distanceKm, fanOutOffsets, type LiveArc } from "../lib/geo";
+import { distanceKm, fanOutOffsets, greatCircle, screenBridgeArc, type LiveArc, type PixelPoint } from "../lib/geo";
 
 import type { GlobeHandle } from "./MapGlobe";
 
@@ -80,8 +80,21 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
     () => fanOutOffsets([...(me ? [{ id: "me", lat: me.lat, lng: me.lng }] : []), ...peers.map(({ id, lat, lng }) => ({ id, lat, lng }))]),
     [me, peers],
   );
-  const props = useRef({ me, peers, liveArcs, arcTo, theme, offsetX, offsetY, pinOffsets });
-  props.current = { me, peers, liveArcs, arcTo, theme, offsetX, offsetY, pinOffsets };
+  const nearLiveArcIds = useMemo(
+    () => new Set(liveArcs.filter((arc) => distanceKm(arc.from[1], arc.from[0], arc.to[1], arc.to[0]) < 1500).map((arc) => arc.id)),
+    [liveArcs],
+  );
+  const longLiveArcCoordinates = useMemo(
+    () => new Map(liveArcs.filter((arc) => !nearLiveArcIds.has(arc.id)).map((arc) => [arc.id, greatCircle(arc.from, arc.to)])),
+    [liveArcs, nearLiveArcIds],
+  );
+  const selectedIsNear = Boolean(me && arcTo && distanceKm(me.lat, me.lng, arcTo.lat, arcTo.lng) < 1500);
+  const selectedLongArc = useMemo(
+    () => (me && arcTo && !selectedIsNear ? greatCircle([me.lng, me.lat], [arcTo.lng, arcTo.lat]) : []),
+    [me?.lat, me?.lng, arcTo?.lat, arcTo?.lng, selectedIsNear],
+  );
+  const props = useRef({ me, peers, liveArcs, arcTo, theme, offsetX, offsetY, pinOffsets, nearLiveArcIds, longLiveArcCoordinates, selectedIsNear, selectedLongArc });
+  props.current = { me, peers, liveArcs, arcTo, theme, offsetX, offsetY, pinOffsets, nearLiveArcIds, longLiveArcCoordinates, selectedIsNear, selectedLongArc };
 
   useImperativeHandle(ref, () => ({
     focus(lat, lng) {
@@ -136,7 +149,20 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
     ro.observe(el);
 
     const frame = (now: number) => {
-      const { me, peers, liveArcs, arcTo, theme, offsetX, offsetY, pinOffsets } = props.current;
+      const {
+        me,
+        peers,
+        liveArcs,
+        arcTo,
+        theme,
+        offsetX,
+        offsetY,
+        pinOffsets,
+        nearLiveArcIds,
+        longLiveArcCoordinates,
+        selectedIsNear,
+        selectedLongArc,
+      } = props.current;
       const gk = grow.current.on ? Math.min(1, (now - grow.current.t0) / 2200) : 0;
       const scale = 0.04 + 0.96 * (1 - Math.pow(1 - gk, 4));
       if (anim.current) {
@@ -152,11 +178,41 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
       const r = Math.max(20, Math.min(availW, availH) * 0.4 * zoom.current * scale);
       const cx = offsetX + availW / 2, cy = availH / 2;
       proj.scale(r).translate([cx, cy]).rotate([rot.current[0], rot.current[1], 0]);
-      const displayPosition = (id: string, coordinates: [number, number]): [number, number] => {
+      const pixelPosition = (id: string, coordinates: [number, number]): PixelPoint | null => {
         const point = proj(coordinates);
-        if (!point) return coordinates;
+        if (!point) return null;
         const offset = pinOffsets.get(id) ?? { x: 0, y: 0 };
-        return proj.invert?.([point[0] + offset.x, point[1] + offset.y]) ?? coordinates;
+        return [point[0] + offset.x, point[1] + offset.y];
+      };
+      const visiblePinPoints = (excludedIds: string[]): PixelPoint[] => {
+        const people = [
+          ...(me ? [{ id: "me", coordinates: [me.lng, me.lat] as [number, number] }] : []),
+          ...peers.map((peer) => ({ id: peer.id, coordinates: [peer.lng, peer.lat] as [number, number] })),
+        ];
+        return people.flatMap(({ id, coordinates }) => {
+          if (excludedIds.includes(id)) return [];
+          const point = pixelPosition(id, coordinates);
+          return !point || point[0] < -50 || point[0] > w + 50 || point[1] < -50 || point[1] > h + 50 ? [] : [point];
+        });
+      };
+      const strokePixels = (points: PixelPoint[]) => {
+        if (points.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(points[0][0], points[0][1]);
+        for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+        ctx.stroke();
+      };
+      const drawEndpointDots = (points: PixelPoint[], color: string) => {
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = color;
+        for (const [x, y] of points) {
+          ctx.beginPath();
+          ctx.arc(x, y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
       };
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -208,47 +264,63 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
       ctx.stroke();
 
       if (me && arcTo) {
-        const coords = bridgeArc(
-          displayPosition("me", [me.lng, me.lat]),
-          displayPosition(arcTo.id, [arcTo.lng, arcTo.lat]),
-          48,
-          distanceKm(me.lat, me.lng, arcTo.lat, arcTo.lng) < 1500,
-        );
+        const selectedColor = radioBlue ? "#5cff8a" : "#b5602f";
         ctx.setLineDash([5, 6]);
         ctx.lineDashOffset = -now / 40;
-        ctx.strokeStyle = radioBlue ? "#5cff8a" : "#b5602f";
+        ctx.strokeStyle = selectedColor;
         ctx.lineWidth = 2;
-        ctx.beginPath();
-        path({ type: "LineString", coordinates: coords });
-        ctx.stroke();
+        if (selectedIsNear) {
+          const a = pixelPosition("me", [me.lng, me.lat]);
+          const b = pixelPosition(arcTo.id, [arcTo.lng, arcTo.lat]);
+          if (a && b) {
+            const screen = screenBridgeArc(a, b, visiblePinPoints(["me", arcTo.id]), 40, 18, 24);
+            strokePixels(screen.points);
+            drawEndpointDots([screen.from, screen.to], selectedColor);
+          }
+        } else {
+          ctx.beginPath();
+          path({ type: "LineString", coordinates: selectedLongArc });
+          ctx.stroke();
+        }
         ctx.setLineDash([]);
       }
 
       const arcGlow = radioBlue ? "#8b5cf6" : "#c9783f";
       const arcCore = radioBlue ? "#c4b5fd" : "#c9783f";
       for (const arc of liveArcs) {
-        const coordinates = bridgeArc(
-          displayPosition(arc.fromId, arc.from),
-          displayPosition(arc.toId, arc.to),
-          48,
-          distanceKm(arc.from[1], arc.from[0], arc.to[1], arc.to[0]) < 1500,
-        );
+        let screen: ReturnType<typeof screenBridgeArc> | null = null;
         ctx.save();
         ctx.shadowColor = arcGlow;
         ctx.shadowBlur = 10;
         ctx.strokeStyle = arcGlow;
         ctx.globalAlpha = 0.35;
         ctx.lineWidth = 6;
-        ctx.beginPath();
-        path({ type: "LineString", coordinates });
-        ctx.stroke();
+        if (nearLiveArcIds.has(arc.id)) {
+          const a = pixelPosition(arc.fromId, arc.from);
+          const b = pixelPosition(arc.toId, arc.to);
+          if (!a || !b) {
+            ctx.restore();
+            continue;
+          }
+          screen = screenBridgeArc(a, b, visiblePinPoints([arc.fromId, arc.toId]));
+          strokePixels(screen.points);
+        } else {
+          ctx.beginPath();
+          path({ type: "LineString", coordinates: longLiveArcCoordinates.get(arc.id) ?? [] });
+          ctx.stroke();
+        }
         ctx.shadowBlur = 0;
         ctx.globalAlpha = 1;
         ctx.strokeStyle = arcCore;
         ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        path({ type: "LineString", coordinates });
-        ctx.stroke();
+        if (screen) {
+          strokePixels(screen.points);
+          drawEndpointDots([screen.from, screen.to], arcCore);
+        } else {
+          ctx.beginPath();
+          path({ type: "LineString", coordinates: longLiveArcCoordinates.get(arc.id) ?? [] });
+          ctx.stroke();
+        }
         ctx.restore();
       }
 

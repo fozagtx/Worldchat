@@ -164,7 +164,7 @@ export function bridgeArc(a: [number, number], b: [number, number], steps = 48, 
     perpendicularLng *= -1;
     perpendicularLat *= -1;
   }
-  const bulge = Math.max(2.5, separation * 0.5);
+  const bulge = Math.max(12, separation * 1.2);
   const controlLng = (startLng + endLng) / 2 + perpendicularLng * bulge;
   const controlLat = Math.max(-89.999, Math.min(89.999, (a[1] + b[1]) / 2 + perpendicularLat * bulge));
   const count = Math.max(1, Math.floor(steps));
@@ -177,6 +177,76 @@ export function bridgeArc(a: [number, number], b: [number, number], steps = 48, 
     coordinates.push([normalizeLng(lng), lat]);
   }
   return coordinates;
+}
+
+export type PixelPoint = [number, number];
+
+export interface ScreenBridge {
+  points: PixelPoint[];
+  from: PixelPoint;
+  to: PixelPoint;
+}
+
+export function screenBridgeArc(
+  a: PixelPoint,
+  b: PixelPoint,
+  nearbyPins: readonly PixelPoint[],
+  steps = 40,
+  fromRadius = 24,
+  toRadius = 24,
+  isVisible?: (points: readonly PixelPoint[]) => boolean,
+): ScreenBridge {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const separation = Math.hypot(dx, dy);
+  const inverseSeparation = separation ? 1 / separation : 0;
+  let normal: PixelPoint = [-dy * inverseSeparation, dx * inverseSeparation];
+  const midpoint: PixelPoint = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const distanceToSegment = (point: PixelPoint) => {
+    if (!separation) return Math.hypot(point[0] - midpoint[0], point[1] - midpoint[1]);
+    const t = Math.max(0, Math.min(1, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / (separation * separation)));
+    return Math.hypot(point[0] - a[0] - t * dx, point[1] - a[1] - t * dy);
+  };
+  const nearby = nearbyPins.filter((point) => distanceToSegment(point) <= 150);
+  if (nearby.length) {
+    const centroid: PixelPoint = [
+      nearby.reduce((sum, point) => sum + point[0], 0) / nearby.length,
+      nearby.reduce((sum, point) => sum + point[1], 0) / nearby.length,
+    ];
+    const away: PixelPoint = [midpoint[0] - centroid[0], midpoint[1] - centroid[1]];
+    if (normal[0] * away[0] + normal[1] * away[1] < 0) normal = [-normal[0], -normal[1]];
+    else if (Math.abs(normal[0] * away[0] + normal[1] * away[1]) < 1e-4 && normal[1] > 0) normal = [-normal[0], -normal[1]];
+  } else if (normal[1] > 0 || (normal[1] === 0 && normal[0] < 0)) {
+    normal = [-normal[0], -normal[1]];
+  }
+  const bulge = Math.max(110, separation * 1.1) * 2.1;
+  const count = Math.max(1, Math.floor(steps));
+  const createBridge = (direction: number): ScreenBridge => {
+    const control: PixelPoint = [
+      midpoint[0] + normal[0] * bulge * direction,
+      midpoint[1] + normal[1] * bulge * direction,
+    ];
+    const fromTangent: PixelPoint = [control[0] - a[0], control[1] - a[1]];
+    const toTangent: PixelPoint = [control[0] - b[0], control[1] - b[1]];
+    const fromLength = Math.hypot(fromTangent[0], fromTangent[1]) || 1;
+    const toLength = Math.hypot(toTangent[0], toTangent[1]) || 1;
+    const from: PixelPoint = [a[0] + (fromTangent[0] / fromLength) * fromRadius, a[1] + (fromTangent[1] / fromLength) * fromRadius];
+    const to: PixelPoint = [b[0] + (toTangent[0] / toLength) * toRadius, b[1] + (toTangent[1] / toLength) * toRadius];
+    const points: PixelPoint[] = [];
+    for (let i = 0; i <= count; i++) {
+      const t = i / count;
+      const inverse = 1 - t;
+      points.push([
+        inverse * inverse * from[0] + 2 * inverse * t * control[0] + t * t * to[0],
+        inverse * inverse * from[1] + 2 * inverse * t * control[1] + t * t * to[1],
+      ]);
+    }
+    return { points, from, to };
+  };
+  const preferred = createBridge(1);
+  if (!isVisible || isVisible([preferred.from, ...preferred.points, preferred.to])) return preferred;
+  const alternative = createBridge(-1);
+  return isVisible([alternative.from, ...alternative.points, alternative.to]) ? alternative : preferred;
 }
 
 export function getPosition(): Promise<GeolocationPosition> {

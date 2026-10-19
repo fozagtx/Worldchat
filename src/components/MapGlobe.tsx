@@ -4,7 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import type { Peer, Profile } from "../lib/protocol";
 import type { ThemeId } from "../lib/theme";
 import { avatarUrl } from "../lib/identity";
-import { bridgeArc, distanceKm, fanOutOffsets, type LiveArc } from "../lib/geo";
+import { distanceKm, fanOutOffsets, greatCircle, screenBridgeArc, type LiveArc, type PixelPoint } from "../lib/geo";
 
 export interface GlobeHandle {
   focus: (lat: number, lng: number) => void;
@@ -107,18 +107,53 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
   const arcAnim = useRef<{ key: string; t0: number } | null>(null);
+  const selectedLongCoordinates = useRef<{ key: string; coordinates: [number, number][] } | null>(null);
+  const selectedArcIsNear = useRef(false);
   const liveArcStarts = useRef(new Map<string, number>());
+  const liveArcIsNear = useRef(new Map<string, boolean>());
+  const liveArcCoordinates = useRef(new Map<string, [number, number][]>());
+  const liveArcEndpoints = useRef(new Map<string, { coordinates: [number, number][]; opacity: number }>());
   const liveArcRaf = useRef(0);
+  const nearArcRaf = useRef(0);
+  const nearArcViewKey = useRef("");
   const initialView = useRef(false);
   const targetZoom = () => (window.innerWidth < 760 ? 1.0 : 1.95);
   const latest = useRef({ me, peers, liveArcs, selectedId, arcTo, theme, padding, revealed });
   latest.current = { me, peers, liveArcs, selectedId, arcTo, theme, padding, revealed };
 
-  const displayPosition = (m: MlMap, id: string, coordinates: [number, number]): [number, number] => {
+  const pixelPosition = (m: MlMap, id: string, coordinates: [number, number]): PixelPoint => {
     const point = m.project(coordinates);
     const offset = pinOffsets.current.get(id) ?? { x: 0, y: 0 };
-    const shifted = m.unproject([point.x + offset.x, point.y + offset.y]);
-    return [shifted.lng, shifted.lat];
+    return [point.x + offset.x, point.y + offset.y];
+  };
+
+  const visiblePinPoints = (m: MlMap, excludedIds: string[]): PixelPoint[] => {
+    const { me, peers } = latest.current;
+    const people = [
+      ...(me ? [{ id: "me", coordinates: [me.lng, me.lat] as [number, number] }] : []),
+      ...peers.map((peer) => ({ id: peer.id, coordinates: [peer.lng, peer.lat] as [number, number] })),
+    ];
+    const width = m.getContainer().clientWidth;
+    const height = m.getContainer().clientHeight;
+    return people.flatMap(({ id, coordinates }) => {
+      if (excludedIds.includes(id)) return [];
+      const element = markers.current.get(id)?.getElement();
+      if (!element || element.style.visibility === "hidden" || Number.parseFloat(element.style.opacity || "1") < 0.05) return [];
+      const point = pixelPosition(m, id, coordinates);
+      return point[0] < -50 || point[0] > width + 50 || point[1] < -50 || point[1] > height + 50 ? [] : [point];
+    });
+  };
+
+  const screenToGeo = (m: MlMap, points: PixelPoint[]): [number, number][] =>
+    points.map((point) => {
+      const { lng, lat } = m.unproject(point);
+      return [lng, lat];
+    });
+
+  const arcViewKey = (m: MlMap) => {
+    const center = m.getCenter();
+    const padding = m.getPadding();
+    return [center.lng, center.lat, m.getZoom(), m.getBearing(), m.getPitch(), padding.top, padding.right, padding.bottom, padding.left, m.getContainer().clientWidth, m.getContainer().clientHeight].join(":");
   };
 
   useImperativeHandle(ref, () => ({
@@ -137,6 +172,7 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
     const m = map.current;
     if (!m || !ready.current) return;
     const { me, peers, selectedId, arcTo } = latest.current;
+    selectedArcIsNear.current = Boolean(me && arcTo && distanceKm(me.lat, me.lng, arcTo.lat, arcTo.lng) < 1500);
     const want = new Map<string, { lng: number; lat: number; seed: string; label: string; cls: string }>();
     if (me) want.set("me", { lng: me.lng, lat: me.lat, seed: me.avatar, label: "You", cls: "pin-me" });
     for (const p of peers) {
@@ -182,34 +218,94 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
     if (!arcAnim.current || arcAnim.current.key !== key) arcAnim.current = { key, t0: performance.now() };
     drawArc();
     drawLiveArcs();
+    nearArcViewKey.current = arcViewKey(m);
   };
 
-  const drawArc = () => {
+  const screenArcFor = (
+    m: MlMap,
+    fromId: string,
+    from: [number, number],
+    toId: string,
+    to: [number, number],
+    fromRadius = 24,
+    toRadius = 24,
+  ) => {
+    const screenPathVisible = (points: readonly PixelPoint[]) => {
+      const stride = Math.max(1, Math.floor((points.length - 1) / 8));
+      for (let i = 0; i < points.length; i += stride) {
+        const point = points[i];
+        const projected = m.project(m.unproject(point));
+        if (Math.hypot(projected.x - point[0], projected.y - point[1]) > 2) return false;
+      }
+      const last = points[points.length - 1];
+      const projected = m.project(m.unproject(last));
+      return Math.hypot(projected.x - last[0], projected.y - last[1]) <= 2;
+    };
+    return screenBridgeArc(
+      pixelPosition(m, fromId, from),
+      pixelPosition(m, toId, to),
+      visiblePinPoints(m, [fromId, toId]),
+      40,
+      fromRadius,
+      toRadius,
+      screenPathVisible,
+    );
+  };
+
+  const setPointData = (m: MlMap, sourceId: string, points: [number, number][], opacity = 1) => {
+    const source = m.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+    source?.setData({
+      type: "FeatureCollection",
+      features: points.map((coordinates) => ({
+        type: "Feature" as const,
+        properties: { opacity },
+        geometry: { type: "Point" as const, coordinates },
+      })),
+    });
+  };
+
+  const drawArc = (nearOnly = false) => {
     const m = map.current;
     const src = m?.getSource("arc") as maplibregl.GeoJSONSource | undefined;
     if (!m || !src) return;
     const { me, arcTo } = latest.current;
-    const full = me && arcTo
-      ? bridgeArc(
-          displayPosition(m, "me", [me.lng, me.lat]),
-          displayPosition(m, arcTo.id, [arcTo.lng, arcTo.lat]),
-          48,
-          distanceKm(me.lat, me.lng, arcTo.lat, arcTo.lng) < 1500,
-        )
-      : [];
+    const near = selectedArcIsNear.current;
+    if (nearOnly && !near) return;
+    let full: [number, number][] = [];
+    let endpoints: [number, number][] = [];
+    if (me && arcTo) {
+      if (near) {
+        const screen = screenArcFor(m, "me", [me.lng, me.lat], arcTo.id, [arcTo.lng, arcTo.lat], 18, 24);
+        full = screenToGeo(m, screen.points);
+        endpoints = screenToGeo(m, [screen.from, screen.to]);
+      } else {
+        const pathKey = `${me.lng}:${me.lat}:${arcTo.id}:${arcTo.lng}:${arcTo.lat}`;
+        if (selectedLongCoordinates.current?.key !== pathKey) {
+          selectedLongCoordinates.current = { key: pathKey, coordinates: greatCircle([me.lng, me.lat], [arcTo.lng, arcTo.lat]) };
+        }
+        full = selectedLongCoordinates.current.coordinates;
+      }
+    }
     const k = arcAnim.current ? Math.min(1, (performance.now() - arcAnim.current.t0) / 900) : 1;
     const n = Math.max(2, Math.ceil(full.length * (1 - Math.pow(1 - k, 3))));
     src.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: full.slice(0, n) } });
-    if (k < 1) requestAnimationFrame(drawArc);
+    setPointData(m, "arc-endpoints", endpoints);
+    if (k < 1) requestAnimationFrame(() => drawArc());
   };
 
-  const drawLiveArcs = () => {
+  const drawLiveArcs = (rebuildLong = true) => {
     const m = map.current;
     const source = m?.getSource("live-arcs") as maplibregl.GeoJSONSource | undefined;
     if (!m || !source) return;
     const arcs = latest.current.liveArcs;
     const ids = new Set(arcs.map((arc) => arc.id));
-    for (const id of liveArcStarts.current.keys()) if (!ids.has(id)) liveArcStarts.current.delete(id);
+    for (const id of liveArcStarts.current.keys()) {
+      if (ids.has(id)) continue;
+      liveArcStarts.current.delete(id);
+      liveArcIsNear.current.delete(id);
+      liveArcCoordinates.current.delete(id);
+      liveArcEndpoints.current.delete(id);
+    }
     const now = performance.now();
     let animating = false;
     const features = arcs.map((arc) => {
@@ -217,27 +313,60 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
       liveArcStarts.current.set(arc.id, startedAt);
       const opacity = Math.min(1, (now - startedAt) / 700);
       if (opacity < 1) animating = true;
+      if (rebuildLong || !liveArcIsNear.current.has(arc.id)) {
+        liveArcIsNear.current.set(arc.id, distanceKm(arc.from[1], arc.from[0], arc.to[1], arc.to[0]) < 1500);
+      }
+      if (liveArcIsNear.current.get(arc.id)) {
+        const screen = screenArcFor(m, arc.fromId, arc.from, arc.toId, arc.to);
+        liveArcCoordinates.current.set(arc.id, screenToGeo(m, screen.points));
+        liveArcEndpoints.current.set(arc.id, { coordinates: screenToGeo(m, [screen.from, screen.to]), opacity });
+      } else {
+        liveArcEndpoints.current.delete(arc.id);
+        if (rebuildLong || !liveArcCoordinates.current.has(arc.id)) {
+          liveArcCoordinates.current.set(arc.id, greatCircle(arc.from, arc.to));
+        }
+      }
       return {
         type: "Feature" as const,
         properties: { opacity },
         geometry: {
           type: "LineString" as const,
-          coordinates: bridgeArc(
-            displayPosition(m, arc.fromId, arc.from),
-            displayPosition(m, arc.toId, arc.to),
-            48,
-            distanceKm(arc.from[1], arc.from[0], arc.to[1], arc.to[0]) < 1500,
-          ),
+          coordinates: liveArcCoordinates.current.get(arc.id) ?? [],
         },
       };
     });
     source.setData({ type: "FeatureCollection", features });
+    const endpointSource = m.getSource("live-arc-endpoints") as maplibregl.GeoJSONSource | undefined;
+    endpointSource?.setData({
+      type: "FeatureCollection",
+      features: [...liveArcEndpoints.current.values()].flatMap(({ coordinates, opacity }) =>
+        coordinates.map((geometryCoordinates) => ({
+          type: "Feature" as const,
+          properties: { opacity },
+          geometry: { type: "Point" as const, coordinates: geometryCoordinates },
+        })),
+      ),
+    });
     if (animating && !liveArcRaf.current) {
       liveArcRaf.current = requestAnimationFrame(() => {
         liveArcRaf.current = 0;
-        drawLiveArcs();
+        drawLiveArcs(false);
       });
     }
+  };
+
+  const queueNearArcUpdate = () => {
+    if (!ready.current || nearArcRaf.current) return;
+    nearArcRaf.current = requestAnimationFrame(() => {
+      nearArcRaf.current = 0;
+      const m = map.current;
+      if (!m || !ready.current) return;
+      const viewKey = arcViewKey(m);
+      if (viewKey === nearArcViewKey.current) return;
+      drawArc(true);
+      drawLiveArcs(false);
+      nearArcViewKey.current = viewKey;
+    });
   };
 
   useEffect(() => {
@@ -263,14 +392,33 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
       ro.observe(box.current);
       m.once("remove", () => ro.disconnect());
       const ensureArc = () => {
+        const color = latest.current.theme === "radio-blue" ? "#5cff8a" : "#b5602f";
         if (!m.getSource("arc")) m.addSource("arc", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } } });
-        if (!m.getLayer("arc")) m.addLayer({ id: "arc", type: "line", source: "arc", paint: { "line-color": latest.current.theme === "radio-blue" ? "#5cff8a" : "#b5602f", "line-width": 2.2, "line-dasharray": [1.5, 1.5] }, layout: { "line-cap": "round" } });
-        else m.setPaintProperty("arc", "line-color", latest.current.theme === "radio-blue" ? "#5cff8a" : "#b5602f");
+        if (!m.getLayer("arc")) m.addLayer({ id: "arc", type: "line", source: "arc", paint: { "line-color": color, "line-width": 2.2, "line-dasharray": [1.5, 1.5] }, layout: { "line-cap": "round" } });
+        else m.setPaintProperty("arc", "line-color", color);
+        if (!m.getSource("arc-endpoints")) m.addSource("arc-endpoints", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        if (!m.getLayer("arc-endpoints-glow")) m.addLayer({
+          id: "arc-endpoints-glow",
+          type: "circle",
+          source: "arc-endpoints",
+          paint: { "circle-radius": 8, "circle-color": color, "circle-blur": 0.8, "circle-opacity": 0.45 },
+        });
+        if (!m.getLayer("arc-endpoints-core")) m.addLayer({
+          id: "arc-endpoints-core",
+          type: "circle",
+          source: "arc-endpoints",
+          paint: { "circle-radius": 3, "circle-color": color, "circle-blur": 0.25 },
+        });
+        else m.setPaintProperty("arc-endpoints-core", "circle-color", color);
+        if (m.getLayer("arc")) m.moveLayer("arc");
+        if (m.getLayer("arc-endpoints-glow")) m.moveLayer("arc-endpoints-glow");
+        if (m.getLayer("arc-endpoints-core")) m.moveLayer("arc-endpoints-core");
       };
       const ensureLiveArcs = () => {
         if (!m.getSource("live-arcs")) m.addSource("live-arcs", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        if (!m.getSource("live-arc-endpoints")) m.addSource("live-arc-endpoints", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         const glow = latest.current.theme === "radio-blue" ? "#8b5cf6" : "#c9783f";
-        const core = latest.current.theme === "radio-blue" ? "#ddd6fe" : "#b5602f";
+        const core = latest.current.theme === "radio-blue" ? "#c4b5fd" : "#b5602f";
         if (!m.getLayer("live-arcs-glow")) {
           m.addLayer({
             id: "live-arcs-glow",
@@ -289,8 +437,36 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
             paint: { "line-color": core, "line-width": 3, "line-opacity": ["get", "opacity"] },
           });
         }
+        if (!m.getLayer("live-arc-endpoints-glow")) {
+          m.addLayer({
+            id: "live-arc-endpoints-glow",
+            type: "circle",
+            source: "live-arc-endpoints",
+            paint: {
+              "circle-radius": 8,
+              "circle-color": glow,
+              "circle-blur": 0.8,
+              "circle-opacity": ["*", ["get", "opacity"], 0.45],
+            },
+          });
+        }
+        if (!m.getLayer("live-arc-endpoints-core")) {
+          m.addLayer({
+            id: "live-arc-endpoints-core",
+            type: "circle",
+            source: "live-arc-endpoints",
+            paint: {
+              "circle-radius": 3,
+              "circle-color": core,
+              "circle-blur": 0.25,
+              "circle-opacity": ["get", "opacity"],
+            },
+          });
+        }
         if (m.getLayer("live-arcs-glow")) m.moveLayer("live-arcs-glow");
         if (m.getLayer("live-arcs-core")) m.moveLayer("live-arcs-core");
+        if (m.getLayer("live-arc-endpoints-glow")) m.moveLayer("live-arc-endpoints-glow");
+        if (m.getLayer("live-arc-endpoints-core")) m.moveLayer("live-arc-endpoints-core");
       };
       m.on("style.load", () => {
         ensureArc();
@@ -305,10 +481,13 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
         onReadyRef.current();
       });
       m.on("click", () => onSelectRef.current(null));
-      m.on("move", () => {
+      m.on("move", queueNearArcUpdate);
+      m.on("render", queueNearArcUpdate);
+      m.on("moveend", () => {
         if (!ready.current) return;
         drawArc();
-        drawLiveArcs();
+        drawLiveArcs(false);
+        nearArcViewKey.current = arcViewKey(m);
       });
       m.on("error", () => onReadyRef.current());
       const hold = () => (idleUntil.current = performance.now() + 6000);
@@ -329,6 +508,7 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
       cancelled = true;
       cancelAnimationFrame(raf);
       cancelAnimationFrame(liveArcRaf.current);
+      cancelAnimationFrame(nearArcRaf.current);
       map.current?.remove();
       map.current = null;
       ready.current = false;
