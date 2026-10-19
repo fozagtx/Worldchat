@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import Orbit from "./Orbit";
 
 interface Props {
   steps: { label: string; done: boolean }[];
@@ -34,29 +35,10 @@ export default function Intro({ steps, onDone }: Props) {
     }
   }, [phase, onDone]);
 
-  const chars = [...RING.repeat(2)];
   return (
     <div className={`intro is-${phase}`} aria-label="Loading Worldchat" role="status">
-      <div className="intro-grid" />
       <div className="intro-core">
-        <div className="intro-ring" style={{ ["--p" as string]: pct / 100 }}>
-          <svg viewBox="0 0 200 200" className="ring-text" aria-hidden>
-            {chars.map((c, i) => (
-              <text key={i} x="100" y="100" transform={`rotate(${(i * 360) / chars.length} 100 100) translate(0 -84)`} textAnchor="middle">
-                {c}
-              </text>
-            ))}
-          </svg>
-          <svg viewBox="0 0 64 64" className="ring-globe" aria-hidden>
-            <circle cx="32" cy="32" r="26" />
-            <ellipse cx="32" cy="32" rx="11" ry="26" />
-            <ellipse cx="32" cy="32" rx="20" ry="26" />
-            <path d="M6 32h52M10 19h44M10 45h44" />
-          </svg>
-          <svg viewBox="0 0 200 200" className="ring-progress" aria-hidden>
-            <circle cx="100" cy="100" r="66" pathLength="100" style={{ strokeDashoffset: 100 - pct }} />
-          </svg>
-        </div>
+        <Orbit size={200} progress={pct / 100} text={RING} glow="strong" tone="cream" className="orbit-intro" />
         <h1 className="intro-word serif">
           {[..."Worldchat"].map((c, i) => (
             <span key={i} style={{ animationDelay: `${i * 45}ms` }}>

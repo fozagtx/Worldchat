@@ -5,6 +5,7 @@ import { distanceKm, formatKm, localTime } from "../lib/geo";
 import Avatar from "./Avatar";
 import Flag from "./Flag";
 import { Cam, CamOff, Expand, Mic, MicOff, Next, PhoneDown, Shrink } from "./icons";
+import Orbit from "./Orbit";
 
 interface Props {
   me: Profile;
@@ -77,10 +78,24 @@ export default function CallWindow({ me, state, localStream, remoteStream, micOn
   const peer = state.peer!;
   const live = state.phase === "active";
   const remoteHasVideo = live && state.remoteVideo && !!remoteStream?.getVideoTracks().some((t) => t.readyState === "live");
+  const orbitSize = big ? 280 : 220;
   const levels = useLevel(live ? remoteStream : null, 18);
   const clock = useClock(live ? state.since : null);
   const status =
     state.phase === "outgoing" ? "RINGING…" : state.phase === "connecting" ? (state.source === "match" ? "MATCHED · CONNECTING" : "CONNECTING") : state.reconnecting ? "RECONNECTING" : null;
+  const emptyMessage = live ? (state.remoteVideo ? "Audio only" : "Their camera is off") : state.phase === "outgoing" ? "Waiting for them to pick up…" : "Connecting you directly…";
+  const orbitText =
+    state.phase === "outgoing"
+      ? `CALLING ${peer.name} · ${peer.city} ·`
+      : state.phase === "connecting"
+        ? "CONNECTING YOU DIRECTLY ·"
+        : live && state.remoteVideo
+          ? "AUDIO ONLY ·"
+          : live
+            ? "CAMERA OFF ·"
+            : state.reconnecting
+              ? "RECONNECTING ·"
+              : "CONNECTED ·";
 
   return (
     <div className={`card callwin ${big ? "big" : ""}`}>
@@ -110,15 +125,18 @@ export default function CallWindow({ me, state, localStream, remoteStream, micOn
       )}
 
       <div className="cw-stage">
+        <Orbit
+          size={orbitSize}
+          text={orbitText}
+          glow={remoteHasVideo ? "soft" : "strong"}
+          tone="dark"
+          className="orbit-call"
+          center={remoteHasVideo ? undefined : <Avatar seed={peer.avatar} size={84} />}
+        />
         {remoteHasVideo ? (
           <Video stream={remoteStream} className="remote" />
         ) : (
-          <div className="cw-empty">
-            <div className={`pulse ${live ? "" : "ringing"}`}>
-              <Avatar seed={peer.avatar} size={84} />
-            </div>
-            <p>{live ? (state.remoteVideo ? "Audio only" : "Their camera is off") : state.phase === "outgoing" ? "Waiting for them to pick up…" : "Connecting you directly…"}</p>
-          </div>
+          <p className="cw-empty">{emptyMessage}</p>
         )}
         {live && !remoteHasVideo && <Video stream={remoteStream} className="hidden" />}
         {live && !state.remoteAudio && <span className="badge mono tiny">MUTED</span>}
