@@ -369,9 +369,12 @@ input { font: inherit; color: inherit; }
 .locate-btn { position: absolute; z-index: 7; right: 22px; bottom: 70px; width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid var(--line-2); border-radius: 50%; background: var(--surface); box-shadow: var(--shadow); transition: background 0.15s, transform 0.15s; }
 .locate-btn:hover { background: var(--surface-2); transform: scale(1.04); }
 .ticker-empty { width: 100%; text-align: center; }
-.tk-track { display: flex; gap: 32px; padding: 0 32px; margin: 0 auto; white-space: nowrap; }
+.tk-track { display: flex; gap: 0; padding: 0; margin: 0 auto; white-space: nowrap; width: max-content; }
 .tk-track.scroll { margin: 0; animation: marquee linear infinite; }
-.tk-dup { display: contents; }
+.tk-sequence { display: flex; flex: none; width: max-content; }
+.tk-copy { display: flex; flex: none; align-items: center; gap: 32px; padding: 0 32px; width: max-content; }
+.tk-measure { position: absolute; top: 0; left: -10000px; visibility: hidden; pointer-events: none; }
+.ticker:hover .tk-track.scroll, .ticker:focus-within .tk-track.scroll { animation-play-state: paused; }
 .tk { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--ink-2); }
 .tk b { font-family: var(--mono); font-weight: 500; color: var(--terra); letter-spacing: 0.02em; }
 .tk:hover b { text-decoration: underline; }

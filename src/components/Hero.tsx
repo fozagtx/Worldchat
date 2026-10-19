@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { Peer, Profile } from "../lib/protocol";
 import type { ConnState } from "../lib/presence";
 import Avatar from "./Avatar";
@@ -52,27 +53,95 @@ export function HeroStats({ me, peers, conn }: { me: Profile; peers: Peer[]; con
 }
 
 export function Ticker({ peers, onPick }: { peers: Peer[]; onPick: (id: string) => void }) {
+  const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const [copies, setCopies] = useState(1);
+  const [duration, setDuration] = useState(1);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const sequenceRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setReducedMotion(query.matches);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!peers.length || reducedMotion) {
+      setCopies(1);
+      return;
+    }
+    const measure = () => {
+      const width = measureRef.current?.getBoundingClientRect().width ?? 0;
+      if (!width) return;
+      const next = Math.max(2, Math.ceil((window.innerWidth * 2 + 1) / width));
+      setCopies((current) => (current === next ? current : next));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (measureRef.current) observer.observe(measureRef.current);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [peers, reducedMotion]);
+
+  useEffect(() => {
+    const width = sequenceRef.current?.getBoundingClientRect().width ?? 0;
+    if (width) setDuration(width / 40);
+  }, [copies, peers, reducedMotion]);
+
   if (!peers.length)
     return (
       <footer className="ticker">
         <span className="mono tiny ticker-empty">NO ONE ELSE IS ONLINE YET — SHARE THE LINK AND THEY'LL APPEAR HERE</span>
       </footer>
     );
-  const scroll = peers.length >= 6;
-  const items = peers.map((p) => (
-    <button key={p.id} className="tk" onClick={() => onPick(p.id)}>
-      <Avatar seed={p.avatar} size={22} />
-      <b>{p.name}</b>
-      <Flag cc={p.cc} />
-      <span>{p.country || p.city}</span>
-      <i className={`dot ${p.status === "available" ? "free" : p.status === "busy" ? "talk" : "match"}`} />
-    </button>
-  ));
+  const renderCopy = (copy: number, prefix: string, mirror = false) => (
+    <div key={`${prefix}-${copy}`} className="tk-copy" aria-hidden={mirror || copy > 0 ? true : undefined}>
+      {peers.map((p) => {
+        const accessible = !mirror && copy === 0;
+        return (
+          <button
+            key={`${prefix}-${copy}-${p.id}`}
+            className="tk"
+            onClick={() => onPick(p.id)}
+            aria-hidden={accessible ? undefined : true}
+            tabIndex={accessible ? undefined : -1}
+          >
+            <Avatar seed={p.avatar} size={22} />
+            <b>{p.name}</b>
+            <Flag cc={p.cc} />
+            <span>{p.country || p.city}</span>
+            <i className={`dot ${p.status === "available" ? "free" : p.status === "busy" ? "talk" : "match"}`} />
+          </button>
+        );
+      })}
+    </div>
+  );
   return (
     <footer className="ticker">
-      <div className={`tk-track ${scroll ? "scroll" : ""}`} style={scroll ? { animationDuration: `${peers.length * 4}s` } : undefined}>
-        {items}
-        {scroll && <span aria-hidden className="tk-dup">{items}</span>}
+      <div className={`tk-track ${reducedMotion ? "" : "scroll"}`} style={reducedMotion ? undefined : { animationDuration: `${duration}s` }}>
+        <div ref={sequenceRef} className="tk-sequence">
+          {Array.from({ length: reducedMotion ? 1 : copies }, (_, copy) => renderCopy(copy, "primary"))}
+        </div>
+        {!reducedMotion && (
+          <div className="tk-sequence" aria-hidden="true">
+            {Array.from({ length: copies }, (_, copy) => renderCopy(copy, "mirror", true))}
+          </div>
+        )}
+      </div>
+      <div ref={measureRef} className="tk-copy tk-measure" aria-hidden="true">
+        {peers.map((p) => (
+          <span key={p.id} className="tk">
+            <Avatar seed={p.avatar} size={22} />
+            <b>{p.name}</b>
+            <Flag cc={p.cc} />
+            <span>{p.country || p.city}</span>
+            <i className={`dot ${p.status === "available" ? "free" : p.status === "busy" ? "talk" : "match"}`} />
+          </span>
+        ))}
       </div>
     </footer>
   );

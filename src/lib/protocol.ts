@@ -20,6 +20,7 @@ export interface Profile {
 export interface Peer extends Profile {
   id: string;
   status: Status;
+  with: string | null;
   joinedAt: string;
 }
 

@@ -5,13 +5,14 @@ import land110 from "world-atlas/land-110m.json";
 import type { Peer, Profile } from "../lib/protocol";
 import type { ThemeId } from "../lib/theme";
 import { avatarUrl } from "../lib/identity";
-import { fanOutOffsets } from "../lib/geo";
+import { fanOutOffsets, greatCircle, type LiveArc } from "../lib/geo";
 
 import type { GlobeHandle } from "./MapGlobe";
 
 interface Props {
   me: Profile | null;
   peers: Peer[];
+  liveArcs: LiveArc[];
   selectedId: string | null;
   arcTo: Peer | null;
   theme: ThemeId;
@@ -54,7 +55,7 @@ function buildDots(): Dot[] {
   return dots;
 }
 
-const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me, peers, selectedId, arcTo, theme, offsetX, offsetY, revealed = true, onSelect }, ref) {
+const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me, peers, liveArcs, selectedId, arcTo, theme, offsetX, offsetY, revealed = true, onSelect }, ref) {
   const grow = useRef({ t0: 0, on: false });
   if (revealed && !grow.current.on) grow.current = { t0: performance.now(), on: true };
   const wrap = useRef<HTMLDivElement>(null);
@@ -79,8 +80,12 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
     () => fanOutOffsets([...(me ? [{ id: "me", lat: me.lat, lng: me.lng }] : []), ...peers.map(({ id, lat, lng }) => ({ id, lat, lng }))]),
     [me, peers],
   );
-  const props = useRef({ me, peers, arcTo, theme, offsetX, offsetY, pinOffsets });
-  props.current = { me, peers, arcTo, theme, offsetX, offsetY, pinOffsets };
+  const liveArcLines = useMemo(
+    () => liveArcs.map((arc) => ({ id: arc.id, coordinates: greatCircle(arc.from, arc.to) })),
+    [liveArcs],
+  );
+  const props = useRef({ me, peers, liveArcLines, arcTo, theme, offsetX, offsetY, pinOffsets });
+  props.current = { me, peers, liveArcLines, arcTo, theme, offsetX, offsetY, pinOffsets };
 
   useImperativeHandle(ref, () => ({
     focus(lat, lng) {
@@ -135,7 +140,7 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
     ro.observe(el);
 
     const frame = (now: number) => {
-      const { me, peers, arcTo, theme, offsetX, offsetY, pinOffsets } = props.current;
+      const { me, peers, liveArcLines, arcTo, theme, offsetX, offsetY, pinOffsets } = props.current;
       const gk = grow.current.on ? Math.min(1, (now - grow.current.t0) / 2200) : 0;
       const scale = 0.04 + 0.96 * (1 - Math.pow(1 - gk, 4));
       if (anim.current) {
@@ -211,6 +216,28 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
         path({ type: "LineString", coordinates: coords });
         ctx.stroke();
         ctx.setLineDash([]);
+      }
+
+      const arcGlow = radioBlue ? "#8b5cf6" : "#c9783f";
+      const arcCore = radioBlue ? "#c4b5fd" : "#c9783f";
+      for (const arc of liveArcLines) {
+        ctx.save();
+        ctx.shadowColor = arcGlow;
+        ctx.shadowBlur = 10;
+        ctx.strokeStyle = arcGlow;
+        ctx.globalAlpha = 0.35;
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        path({ type: "LineString", coordinates: arc.coordinates });
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = arcCore;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        path({ type: "LineString", coordinates: arc.coordinates });
+        ctx.stroke();
+        ctx.restore();
       }
 
       const place = (id: string, lng: number, lat: number) => {

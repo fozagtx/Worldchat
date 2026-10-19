@@ -117,6 +117,7 @@ test("hello welcomes with current peers and broadcasts joins", async (t) => {
   const secondWelcome = await sayHello(second);
   assert.equal(secondWelcome.peers.length, 1);
   assert.equal(secondWelcome.peers[0].id, firstWelcome.id);
+  assert.equal(secondWelcome.peers[0].with, null);
   const join = await first.waitFor((message) => message.type === "join" && message.peer.id === secondWelcome.id);
   assert.equal(join.peer.name, "Traveler");
 });
@@ -280,8 +281,12 @@ test("match pairs compatible peers with shared call details and busy status", as
   assert.deepEqual(firstMatched.shared, ["music"]);
   assert.equal(firstMatched.peer.status, "busy");
   assert.equal(secondMatched.peer.status, "busy");
-  assert.equal((await first.waitFor((message) => message.type === "update" && message.peer.id === firstWelcome.id && message.peer.status === "busy")).peer.status, "busy");
-  assert.equal((await second.waitFor((message) => message.type === "update" && message.peer.id === secondWelcome.id && message.peer.status === "busy")).peer.status, "busy");
+  assert.equal(firstMatched.peer.with, firstWelcome.id);
+  assert.equal(secondMatched.peer.with, secondWelcome.id);
+  const firstUpdate = await first.waitFor((message) => message.type === "update" && message.peer.id === firstWelcome.id && message.peer.status === "busy");
+  const secondUpdate = await second.waitFor((message) => message.type === "update" && message.peer.id === secondWelcome.id && message.peer.status === "busy");
+  assert.equal(firstUpdate.peer.with, secondWelcome.id);
+  assert.equal(secondUpdate.peer.with, firstWelcome.id);
 });
 
 test("matching skips incompatible genders and pairs when a compatible peer joins", async (t) => {
@@ -392,6 +397,72 @@ test("unmatch removes a peer from the queue and restores available status", asyn
   first.send({ type: "match" });
   const [firstResult, secondResult] = await Promise.all([firstMatched, secondMatched]);
   assert.equal(firstResult.callId, secondResult.callId);
+});
+
+test("talking sets reciprocal peer relationships and unmatch clears both", async (t) => {
+  const first = connect(t);
+  const second = connect(t);
+  const firstWelcome = await sayHello(first);
+  const secondWelcome = await sayHello(second);
+  first.send({ type: "status", status: "busy" });
+  second.send({ type: "status", status: "busy" });
+  await first.waitFor((message) => message.type === "update" && message.peer.id === firstWelcome.id && message.peer.status === "busy");
+  await second.waitFor((message) => message.type === "update" && message.peer.id === secondWelcome.id && message.peer.status === "busy");
+
+  const firstLinked = first.waitFor((message) => message.type === "update" && message.peer.id === firstWelcome.id && message.peer.with === secondWelcome.id);
+  const secondLinked = second.waitFor((message) => message.type === "update" && message.peer.id === secondWelcome.id && message.peer.with === firstWelcome.id);
+  first.send({ type: "talking", with: secondWelcome.id });
+  await Promise.all([firstLinked, secondLinked]);
+
+  const firstCleared = first.waitFor((message) => message.type === "update" && message.peer.id === firstWelcome.id && message.peer.status === "available" && message.peer.with === null);
+  const secondCleared = second.waitFor((message) => message.type === "update" && message.peer.id === secondWelcome.id && message.peer.with === null);
+  first.send({ type: "unmatch" });
+  assert.equal((await firstCleared).peer.with, null);
+  assert.equal((await secondCleared).peer.with, null);
+});
+
+test("status available clears both sides of a talking relationship", async (t) => {
+  const first = connect(t);
+  const second = connect(t);
+  const firstWelcome = await sayHello(first);
+  const secondWelcome = await sayHello(second);
+  first.send({ type: "status", status: "busy" });
+  second.send({ type: "status", status: "busy" });
+  await first.waitFor((message) => message.type === "update" && message.peer.id === firstWelcome.id && message.peer.status === "busy");
+  await second.waitFor((message) => message.type === "update" && message.peer.id === secondWelcome.id && message.peer.status === "busy");
+
+  const firstLinked = first.waitFor((message) => message.type === "update" && message.peer.id === firstWelcome.id && message.peer.with === secondWelcome.id);
+  const secondLinked = second.waitFor((message) => message.type === "update" && message.peer.id === secondWelcome.id && message.peer.with === firstWelcome.id);
+  first.send({ type: "talking", with: secondWelcome.id });
+  await Promise.all([firstLinked, secondLinked]);
+
+  const firstCleared = first.waitFor((message) => message.type === "update" && message.peer.id === firstWelcome.id && message.peer.status === "available" && message.peer.with === null);
+  const secondCleared = second.waitFor((message) => message.type === "update" && message.peer.id === secondWelcome.id && message.peer.with === null);
+  first.send({ type: "status", status: "available" });
+  assert.equal((await firstCleared).peer.with, null);
+  assert.equal((await secondCleared).peer.with, null);
+});
+
+test("disconnect clears the remaining peer's call relationship", async (t) => {
+  const first = connect(t);
+  const second = connect(t);
+  const firstWelcome = await sayHello(first);
+  const secondWelcome = await sayHello(second);
+  first.send({ type: "status", status: "busy" });
+  second.send({ type: "status", status: "busy" });
+  await first.waitFor((message) => message.type === "update" && message.peer.id === firstWelcome.id && message.peer.status === "busy");
+  await second.waitFor((message) => message.type === "update" && message.peer.id === secondWelcome.id && message.peer.status === "busy");
+
+  const firstLinked = first.waitFor((message) => message.type === "update" && message.peer.id === firstWelcome.id && message.peer.with === secondWelcome.id);
+  const secondLinked = second.waitFor((message) => message.type === "update" && message.peer.id === secondWelcome.id && message.peer.with === firstWelcome.id);
+  first.send({ type: "talking", with: secondWelcome.id });
+  await Promise.all([firstLinked, secondLinked]);
+
+  const secondCleared = second.waitFor((message) => message.type === "update" && message.peer.id === secondWelcome.id && message.peer.with === null);
+  const firstLeft = second.waitFor((message) => message.type === "leave" && message.id === firstWelcome.id);
+  await first.close();
+  assert.equal((await secondCleared).peer.with, null);
+  assert.equal((await firstLeft).id, firstWelcome.id);
 });
 
 test("knocks reject available peers and queue knockers in FIFO order", async (t) => {

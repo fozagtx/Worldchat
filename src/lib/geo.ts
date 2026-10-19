@@ -7,6 +7,35 @@ export interface FanOutLocation {
   lng: number;
 }
 
+export interface LiveArcLocation extends FanOutLocation {
+  with: string | null;
+}
+
+export interface LiveArc {
+  id: string;
+  from: [number, number];
+  to: [number, number];
+}
+
+export function liveConnectionPairs(people: readonly LiveArcLocation[]): LiveArc[] {
+  const byId = new Map<string, LiveArcLocation>(people.map((person) => [person.id, person] as const));
+  const pairs = new Map<string, LiveArc>();
+  for (const person of people) {
+    if (!person.with) continue;
+    const partner = byId.get(person.with);
+    if (!partner || partner.id === person.id) continue;
+    const [first, second] = person.id.localeCompare(partner.id) < 0 ? [person, partner] : [partner, person];
+    const id = JSON.stringify([first.id, second.id]);
+    if (pairs.has(id)) continue;
+    pairs.set(id, {
+      id,
+      from: [first.lng, first.lat],
+      to: [second.lng, second.lat],
+    });
+  }
+  return [...pairs.values()];
+}
+
 export function fanOutOffsets(locations: readonly FanOutLocation[]) {
   const offsets = new Map(locations.map(({ id }) => [id, { x: 0, y: 0 }]));
   const byId = new Map(locations.map((location) => [location.id, location]));

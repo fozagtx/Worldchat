@@ -4,7 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import type { Peer, Profile } from "../lib/protocol";
 import type { ThemeId } from "../lib/theme";
 import { avatarUrl } from "../lib/identity";
-import { fanOutOffsets, greatCircle } from "../lib/geo";
+import { fanOutOffsets, greatCircle, type LiveArc } from "../lib/geo";
 
 export interface GlobeHandle {
   focus: (lat: number, lng: number) => void;
@@ -14,6 +14,7 @@ export interface GlobeHandle {
 interface Props {
   me: Profile | null;
   peers: Peer[];
+  liveArcs: LiveArc[];
   selectedId: string | null;
   arcTo: Peer | null;
   theme: ThemeId;
@@ -92,7 +93,7 @@ function markerEl(cls: string) {
   return el;
 }
 
-const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, selectedId, arcTo, theme, padding, paused, revealed, onReady, onSelect }, ref) {
+const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, liveArcs, selectedId, arcTo, theme, padding, paused, revealed, onReady, onSelect }, ref) {
   const box = useRef<HTMLDivElement>(null);
   const map = useRef<MlMap | null>(null);
   const ready = useRef(false);
@@ -105,10 +106,12 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
   const arcAnim = useRef<{ key: string; t0: number } | null>(null);
+  const liveArcStarts = useRef(new Map<string, number>());
+  const liveArcRaf = useRef(0);
   const initialView = useRef(false);
   const targetZoom = () => (window.innerWidth < 760 ? 1.0 : 1.95);
-  const latest = useRef({ me, peers, selectedId, arcTo, theme, padding, revealed });
-  latest.current = { me, peers, selectedId, arcTo, theme, padding, revealed };
+  const latest = useRef({ me, peers, liveArcs, selectedId, arcTo, theme, padding, revealed });
+  latest.current = { me, peers, liveArcs, selectedId, arcTo, theme, padding, revealed };
 
   useImperativeHandle(ref, () => ({
     focus(lat, lng) {
@@ -169,6 +172,7 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
     const key = me && arcTo ? `${arcTo.id}` : "";
     if (!arcAnim.current || arcAnim.current.key !== key) arcAnim.current = { key, t0: performance.now() };
     drawArc();
+    drawLiveArcs();
   };
 
   const drawArc = () => {
@@ -181,6 +185,35 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
     const n = Math.max(2, Math.ceil(full.length * (1 - Math.pow(1 - k, 3))));
     src.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: full.slice(0, n) } });
     if (k < 1) requestAnimationFrame(drawArc);
+  };
+
+  const drawLiveArcs = () => {
+    const m = map.current;
+    const source = m?.getSource("live-arcs") as maplibregl.GeoJSONSource | undefined;
+    if (!source) return;
+    const arcs = latest.current.liveArcs;
+    const ids = new Set(arcs.map((arc) => arc.id));
+    for (const id of liveArcStarts.current.keys()) if (!ids.has(id)) liveArcStarts.current.delete(id);
+    const now = performance.now();
+    let animating = false;
+    const features = arcs.map((arc) => {
+      const startedAt = liveArcStarts.current.get(arc.id) ?? now;
+      liveArcStarts.current.set(arc.id, startedAt);
+      const opacity = Math.min(1, (now - startedAt) / 700);
+      if (opacity < 1) animating = true;
+      return {
+        type: "Feature" as const,
+        properties: { opacity },
+        geometry: { type: "LineString" as const, coordinates: greatCircle(arc.from, arc.to) },
+      };
+    });
+    source.setData({ type: "FeatureCollection", features });
+    if (animating && !liveArcRaf.current) {
+      liveArcRaf.current = requestAnimationFrame(() => {
+        liveArcRaf.current = 0;
+        drawLiveArcs();
+      });
+    }
   };
 
   useEffect(() => {
@@ -210,12 +243,37 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
         if (!m.getLayer("arc")) m.addLayer({ id: "arc", type: "line", source: "arc", paint: { "line-color": latest.current.theme === "radio-blue" ? "#5cff8a" : "#b5602f", "line-width": 2.2, "line-dasharray": [1.5, 1.5] }, layout: { "line-cap": "round" } });
         else m.setPaintProperty("arc", "line-color", latest.current.theme === "radio-blue" ? "#5cff8a" : "#b5602f");
       };
+      const ensureLiveArcs = () => {
+        if (!m.getSource("live-arcs")) m.addSource("live-arcs", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        const glow = latest.current.theme === "radio-blue" ? "#8b5cf6" : "#c9783f";
+        const core = latest.current.theme === "radio-blue" ? "#c4b5fd" : "#c9783f";
+        if (!m.getLayer("live-arcs-glow")) {
+          m.addLayer({
+            id: "live-arcs-glow",
+            type: "line",
+            source: "live-arcs",
+            layout: { "line-cap": "round", "line-join": "round" },
+            paint: { "line-color": glow, "line-width": 10, "line-blur": 8, "line-opacity": ["*", ["get", "opacity"], 0.6] },
+          });
+        }
+        if (!m.getLayer("live-arcs-core")) {
+          m.addLayer({
+            id: "live-arcs-core",
+            type: "line",
+            source: "live-arcs",
+            layout: { "line-cap": "round", "line-join": "round" },
+            paint: { "line-color": core, "line-width": 2.2, "line-opacity": ["get", "opacity"] },
+          });
+        }
+      };
       m.on("style.load", () => {
         ensureArc();
+        ensureLiveArcs();
         if (ready.current) sync();
       });
       m.on("load", () => {
         ensureArc();
+        ensureLiveArcs();
         ready.current = true;
         sync();
         onReadyRef.current();
@@ -239,6 +297,7 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
+      cancelAnimationFrame(liveArcRaf.current);
       map.current?.remove();
       map.current = null;
       ready.current = false;
@@ -259,7 +318,7 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
     };
   }, [theme]);
 
-  useEffect(sync, [me, peers, selectedId, arcTo]);
+  useEffect(sync, [me, peers, liveArcs, selectedId, arcTo]);
 
   useEffect(() => {
     const m = map.current;

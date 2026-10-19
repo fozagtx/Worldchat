@@ -16,6 +16,7 @@ import { useTheme } from "./lib/theme";
 import { loadProfile, saveProfile } from "./lib/profile";
 import { setLofiDuck, startLofi, stopLofi } from "./lib/lofi";
 import type { Peer, Profile } from "./lib/protocol";
+import { liveConnectionPairs } from "./lib/geo";
 import { Close, Locate } from "./components/icons";
 
 function useIsMobile() {
@@ -60,6 +61,18 @@ export default function App() {
   const { state } = callApi;
 
   const peersById = useMemo(() => new Map(presence.peers.map((p) => [p.id, p])), [presence.peers]);
+  const liveArcs = useMemo(() => {
+    if (!profile || !presence.selfId) return [];
+    return liveConnectionPairs([
+      ...presence.peers.map(({ id, lat, lng, with: partnerId }) => ({ id, lat, lng, with: partnerId })),
+      {
+        id: presence.selfId,
+        lat: profile.lat,
+        lng: profile.lng,
+        with: presence.me?.with ?? null,
+      },
+    ]);
+  }, [profile, presence.peers, presence.selfId, presence.me?.with]);
   const inCall = state.phase === "outgoing" || state.phase === "connecting" || state.phase === "active";
   const matching = presence.me?.status === "matching";
   const selected = selectedId ? peersById.get(selectedId) ?? null : null;
@@ -197,6 +210,7 @@ export default function App() {
           ref={globe}
           me={profile}
           peers={presence.peers}
+          liveArcs={liveArcs}
           selectedId={selectedId}
           arcTo={arcPeer}
           paused={!!selected || inCall}
@@ -211,6 +225,7 @@ export default function App() {
           ref={globe}
           me={profile}
           peers={presence.peers}
+          liveArcs={liveArcs}
           selectedId={selectedId}
           arcTo={arcPeer}
           theme={theme}

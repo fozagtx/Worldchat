@@ -125,6 +125,18 @@ export function createServer({
     if (index !== -1) matchQueue.splice(index, 1);
   }
 
+  function clearCall(id) {
+    const current = peers.get(id);
+    if (!current || current.peer.with === null) return;
+    const partnerId = current.peer.with;
+    current.peer = { ...current.peer, with: null };
+    const partner = typeof partnerId === "string" ? peers.get(partnerId) : null;
+    if (partner?.peer.with === id) {
+      partner.peer = { ...partner.peer, with: null };
+      broadcast({ type: "update", peer: partner.peer });
+    }
+  }
+
   function emitActivity(kind, participants) {
     const at = now();
     if (kind === "talking") {
@@ -229,8 +241,10 @@ export function createServer({
     const at = now();
     lastPartner.set(firstEntry.id, { id: secondEntry.id, at });
     lastPartner.set(secondEntry.id, { id: firstEntry.id, at });
-    first.peer = { ...first.peer, status: "busy" };
-    second.peer = { ...second.peer, status: "busy" };
+    clearCall(firstEntry.id);
+    clearCall(secondEntry.id);
+    first.peer = { ...first.peer, status: "busy", with: secondEntry.id };
+    second.peer = { ...second.peer, status: "busy", with: firstEntry.id };
     broadcast({ type: "update", peer: first.peer });
     broadcast({ type: "update", peer: second.peer });
 
@@ -412,6 +426,7 @@ export function createServer({
               ...profile,
               avatar: profile.avatar || id.slice(0, 8),
               status: "available",
+              with: null,
               joinedAt: new Date(now()).toISOString(),
             };
             connection.id = peer.id;
@@ -448,6 +463,7 @@ export function createServer({
             }
             removeMatchQueue(connection.id);
             const current = peers.get(connection.id);
+            if (message.status === "available") clearCall(connection.id);
             current.peer = { ...current.peer, status: message.status };
             broadcast({ type: "update", peer: current.peer });
             if (message.status === "available") handOffKnocks(connection.id);
@@ -466,6 +482,7 @@ export function createServer({
           case "unmatch": {
             removeMatchQueue(connection.id);
             const current = peers.get(connection.id);
+            clearCall(connection.id);
             current.peer = { ...current.peer, status: "available" };
             broadcast({ type: "update", peer: current.peer });
             handOffKnocks(connection.id);
@@ -510,7 +527,15 @@ export function createServer({
           case "talking": {
             const target = typeof message.with === "string" ? peers.get(message.with) : null;
             const sender = peers.get(connection.id);
-            if (target && sender.peer.status === "busy" && target.peer.status === "busy") {
+            if (target && sender && target.peer.id !== sender.peer.id && sender.peer.status === "busy" && target.peer.status === "busy") {
+              if (sender.peer.with !== target.peer.id || target.peer.with !== sender.peer.id) {
+                clearCall(sender.peer.id);
+                clearCall(target.peer.id);
+                sender.peer = { ...sender.peer, with: target.peer.id };
+                target.peer = { ...target.peer, with: sender.peer.id };
+                broadcast({ type: "update", peer: sender.peer });
+                broadcast({ type: "update", peer: target.peer });
+              }
               emitActivity("talking", [sender.peer, target.peer]);
             }
             break;
@@ -560,6 +585,7 @@ export function createServer({
       const entry = peers.get(connection.id);
       if (!entry) return;
 
+      clearCall(connection.id);
       removeMatchQueue(connection.id);
       for (const knockerId of knockQueues.get(connection.id) || []) {
         const knocker = peers.get(knockerId);
