@@ -4,7 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import type { Peer, Profile } from "../lib/protocol";
 import type { ThemeId } from "../lib/theme";
 import { avatarUrl } from "../lib/identity";
-import { fanOutOffsets, greatCircle, type LiveArc } from "../lib/geo";
+import { bridgeArc, distanceKm, fanOutOffsets, type LiveArc } from "../lib/geo";
 
 export interface GlobeHandle {
   focus: (lat: number, lng: number) => void;
@@ -98,6 +98,7 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
   const map = useRef<MlMap | null>(null);
   const ready = useRef(false);
   const markers = useRef(new Map<string, maplibregl.Marker>());
+  const pinOffsets = useRef(new Map<string, { x: number; y: number }>());
   const idleUntil = useRef(0);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
@@ -112,6 +113,13 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
   const targetZoom = () => (window.innerWidth < 760 ? 1.0 : 1.95);
   const latest = useRef({ me, peers, liveArcs, selectedId, arcTo, theme, padding, revealed });
   latest.current = { me, peers, liveArcs, selectedId, arcTo, theme, padding, revealed };
+
+  const displayPosition = (m: MlMap, id: string, coordinates: [number, number]): [number, number] => {
+    const point = m.project(coordinates);
+    const offset = pinOffsets.current.get(id) ?? { x: 0, y: 0 };
+    const shifted = m.unproject([point.x + offset.x, point.y + offset.y]);
+    return [shifted.lng, shifted.lat];
+  };
 
   useImperativeHandle(ref, () => ({
     focus(lat, lng) {
@@ -142,6 +150,7 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
       });
     }
     const offsets = fanOutOffsets([...want].map(([id, p]) => ({ id, lat: p.lat, lng: p.lng })));
+    pinOffsets.current = offsets;
     for (const [id, mk] of markers.current) if (!want.has(id)) (mk.remove(), markers.current.delete(id));
     for (const [id, w] of want) {
       let mk = markers.current.get(id);
@@ -178,9 +187,16 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
   const drawArc = () => {
     const m = map.current;
     const src = m?.getSource("arc") as maplibregl.GeoJSONSource | undefined;
-    if (!src) return;
+    if (!m || !src) return;
     const { me, arcTo } = latest.current;
-    const full = me && arcTo ? greatCircle([me.lng, me.lat], [arcTo.lng, arcTo.lat]) : [];
+    const full = me && arcTo
+      ? bridgeArc(
+          displayPosition(m, "me", [me.lng, me.lat]),
+          displayPosition(m, arcTo.id, [arcTo.lng, arcTo.lat]),
+          48,
+          distanceKm(me.lat, me.lng, arcTo.lat, arcTo.lng) < 1500,
+        )
+      : [];
     const k = arcAnim.current ? Math.min(1, (performance.now() - arcAnim.current.t0) / 900) : 1;
     const n = Math.max(2, Math.ceil(full.length * (1 - Math.pow(1 - k, 3))));
     src.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: full.slice(0, n) } });
@@ -190,7 +206,7 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
   const drawLiveArcs = () => {
     const m = map.current;
     const source = m?.getSource("live-arcs") as maplibregl.GeoJSONSource | undefined;
-    if (!source) return;
+    if (!m || !source) return;
     const arcs = latest.current.liveArcs;
     const ids = new Set(arcs.map((arc) => arc.id));
     for (const id of liveArcStarts.current.keys()) if (!ids.has(id)) liveArcStarts.current.delete(id);
@@ -204,7 +220,15 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
       return {
         type: "Feature" as const,
         properties: { opacity },
-        geometry: { type: "LineString" as const, coordinates: greatCircle(arc.from, arc.to) },
+        geometry: {
+          type: "LineString" as const,
+          coordinates: bridgeArc(
+            displayPosition(m, arc.fromId, arc.from),
+            displayPosition(m, arc.toId, arc.to),
+            48,
+            distanceKm(arc.from[1], arc.from[0], arc.to[1], arc.to[0]) < 1500,
+          ),
+        },
       };
     });
     source.setData({ type: "FeatureCollection", features });
@@ -265,6 +289,8 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
             paint: { "line-color": core, "line-width": 3, "line-opacity": ["get", "opacity"] },
           });
         }
+        if (m.getLayer("live-arcs-glow")) m.moveLayer("live-arcs-glow");
+        if (m.getLayer("live-arcs-core")) m.moveLayer("live-arcs-core");
       };
       m.on("style.load", () => {
         ensureArc();
@@ -279,6 +305,11 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, l
         onReadyRef.current();
       });
       m.on("click", () => onSelectRef.current(null));
+      m.on("move", () => {
+        if (!ready.current) return;
+        drawArc();
+        drawLiveArcs();
+      });
       m.on("error", () => onReadyRef.current());
       const hold = () => (idleUntil.current = performance.now() + 6000);
       m.on("mousedown", hold);

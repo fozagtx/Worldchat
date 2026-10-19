@@ -13,6 +13,8 @@ export interface LiveArcLocation extends FanOutLocation {
 
 export interface LiveArc {
   id: string;
+  fromId: string;
+  toId: string;
   from: [number, number];
   to: [number, number];
 }
@@ -29,6 +31,8 @@ export function liveConnectionPairs(people: readonly LiveArcLocation[]): LiveArc
     if (pairs.has(id)) continue;
     pairs.set(id, {
       id,
+      fromId: first.id,
+      toId: second.id,
       from: [first.lng, first.lat],
       to: [second.lng, second.lat],
     });
@@ -138,6 +142,41 @@ export function greatCircle(a: [number, number], b: [number, number], n = 64): [
     out.push([(Math.atan2(y, x) * 180) / Math.PI, (Math.atan2(z, Math.hypot(x, y)) * 180) / Math.PI]);
   }
   return out;
+}
+
+export function bridgeArc(a: [number, number], b: [number, number], steps = 48, forceBridge = false): [number, number][] {
+  const normalizeLng = (lng: number) => ((lng + 180) % 360 + 360) % 360 - 180;
+  const startLng = normalizeLng(a[0]);
+  const normalizedEndLng = normalizeLng(b[0]);
+  const deltaLng = normalizeLng(normalizedEndLng - startLng);
+  const distanceLat = rad(b[1] - a[1]);
+  const distanceLng = rad(deltaLng);
+  const haversine = Math.sin(distanceLat / 2) ** 2 + Math.cos(rad(a[1])) * Math.cos(rad(b[1])) * Math.sin(distanceLng / 2) ** 2;
+  const distance = 2 * R * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+  if (distance >= 1500 && !forceBridge) return greatCircle(a, b);
+
+  const endLng = startLng + deltaLng;
+  const deltaLat = b[1] - a[1];
+  const separation = Math.hypot(deltaLng, deltaLat);
+  let perpendicularLng = separation ? -deltaLat / separation : 0;
+  let perpendicularLat = separation ? deltaLng / separation : 1;
+  if (perpendicularLat > 0 || (perpendicularLat === 0 && perpendicularLng > 0)) {
+    perpendicularLng *= -1;
+    perpendicularLat *= -1;
+  }
+  const bulge = Math.max(2.5, separation * 0.5);
+  const controlLng = (startLng + endLng) / 2 + perpendicularLng * bulge;
+  const controlLat = Math.max(-89.999, Math.min(89.999, (a[1] + b[1]) / 2 + perpendicularLat * bulge));
+  const count = Math.max(1, Math.floor(steps));
+  const coordinates: [number, number][] = [];
+  for (let i = 0; i <= count; i++) {
+    const t = i / count;
+    const inverse = 1 - t;
+    const lng = inverse * inverse * startLng + 2 * inverse * t * controlLng + t * t * endLng;
+    const lat = inverse * inverse * a[1] + 2 * inverse * t * controlLat + t * t * b[1];
+    coordinates.push([normalizeLng(lng), lat]);
+  }
+  return coordinates;
 }
 
 export function getPosition(): Promise<GeolocationPosition> {

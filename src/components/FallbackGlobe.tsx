@@ -1,11 +1,11 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
-import { geoEquirectangular, geoGraticule10, geoInterpolate, geoOrthographic, geoPath } from "d3-geo";
+import { geoEquirectangular, geoGraticule10, geoOrthographic, geoPath } from "d3-geo";
 import { feature } from "topojson-client";
 import land110 from "world-atlas/land-110m.json";
 import type { Peer, Profile } from "../lib/protocol";
 import type { ThemeId } from "../lib/theme";
 import { avatarUrl } from "../lib/identity";
-import { fanOutOffsets, greatCircle, type LiveArc } from "../lib/geo";
+import { bridgeArc, distanceKm, fanOutOffsets, type LiveArc } from "../lib/geo";
 
 import type { GlobeHandle } from "./MapGlobe";
 
@@ -80,12 +80,8 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
     () => fanOutOffsets([...(me ? [{ id: "me", lat: me.lat, lng: me.lng }] : []), ...peers.map(({ id, lat, lng }) => ({ id, lat, lng }))]),
     [me, peers],
   );
-  const liveArcLines = useMemo(
-    () => liveArcs.map((arc) => ({ id: arc.id, coordinates: greatCircle(arc.from, arc.to) })),
-    [liveArcs],
-  );
-  const props = useRef({ me, peers, liveArcLines, arcTo, theme, offsetX, offsetY, pinOffsets });
-  props.current = { me, peers, liveArcLines, arcTo, theme, offsetX, offsetY, pinOffsets };
+  const props = useRef({ me, peers, liveArcs, arcTo, theme, offsetX, offsetY, pinOffsets });
+  props.current = { me, peers, liveArcs, arcTo, theme, offsetX, offsetY, pinOffsets };
 
   useImperativeHandle(ref, () => ({
     focus(lat, lng) {
@@ -140,7 +136,7 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
     ro.observe(el);
 
     const frame = (now: number) => {
-      const { me, peers, liveArcLines, arcTo, theme, offsetX, offsetY, pinOffsets } = props.current;
+      const { me, peers, liveArcs, arcTo, theme, offsetX, offsetY, pinOffsets } = props.current;
       const gk = grow.current.on ? Math.min(1, (now - grow.current.t0) / 2200) : 0;
       const scale = 0.04 + 0.96 * (1 - Math.pow(1 - gk, 4));
       if (anim.current) {
@@ -156,6 +152,12 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
       const r = Math.max(20, Math.min(availW, availH) * 0.4 * zoom.current * scale);
       const cx = offsetX + availW / 2, cy = availH / 2;
       proj.scale(r).translate([cx, cy]).rotate([rot.current[0], rot.current[1], 0]);
+      const displayPosition = (id: string, coordinates: [number, number]): [number, number] => {
+        const point = proj(coordinates);
+        if (!point) return coordinates;
+        const offset = pinOffsets.get(id) ?? { x: 0, y: 0 };
+        return proj.invert?.([point[0] + offset.x, point[1] + offset.y]) ?? coordinates;
+      };
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
@@ -206,8 +208,12 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
       ctx.stroke();
 
       if (me && arcTo) {
-        const interp = geoInterpolate([me.lng, me.lat], [arcTo.lng, arcTo.lat]);
-        const coords = Array.from({ length: 65 }, (_, i) => interp(i / 64));
+        const coords = bridgeArc(
+          displayPosition("me", [me.lng, me.lat]),
+          displayPosition(arcTo.id, [arcTo.lng, arcTo.lat]),
+          48,
+          distanceKm(me.lat, me.lng, arcTo.lat, arcTo.lng) < 1500,
+        );
         ctx.setLineDash([5, 6]);
         ctx.lineDashOffset = -now / 40;
         ctx.strokeStyle = radioBlue ? "#5cff8a" : "#b5602f";
@@ -220,7 +226,13 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
 
       const arcGlow = radioBlue ? "#8b5cf6" : "#c9783f";
       const arcCore = radioBlue ? "#c4b5fd" : "#c9783f";
-      for (const arc of liveArcLines) {
+      for (const arc of liveArcs) {
+        const coordinates = bridgeArc(
+          displayPosition(arc.fromId, arc.from),
+          displayPosition(arc.toId, arc.to),
+          48,
+          distanceKm(arc.from[1], arc.from[0], arc.to[1], arc.to[0]) < 1500,
+        );
         ctx.save();
         ctx.shadowColor = arcGlow;
         ctx.shadowBlur = 10;
@@ -228,14 +240,14 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
         ctx.globalAlpha = 0.35;
         ctx.lineWidth = 6;
         ctx.beginPath();
-        path({ type: "LineString", coordinates: arc.coordinates });
+        path({ type: "LineString", coordinates });
         ctx.stroke();
         ctx.shadowBlur = 0;
         ctx.globalAlpha = 1;
         ctx.strokeStyle = arcCore;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        path({ type: "LineString", coordinates: arc.coordinates });
+        path({ type: "LineString", coordinates });
         ctx.stroke();
         ctx.restore();
       }
