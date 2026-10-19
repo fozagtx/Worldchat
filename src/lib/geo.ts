@@ -1,6 +1,42 @@
 const R = 6371;
 const rad = (d: number) => (d * Math.PI) / 180;
 
+export interface FanOutLocation {
+  id: string;
+  lat: number;
+  lng: number;
+}
+
+export function fanOutOffsets(locations: readonly FanOutLocation[]) {
+  const offsets = new Map(locations.map(({ id }) => [id, { x: 0, y: 0 }]));
+  const byId = new Map(locations.map((location) => [location.id, location]));
+  const remaining = new Set(byId.keys());
+  while (remaining.size) {
+    const seedId = remaining.values().next().value;
+    if (seedId === undefined) break;
+    remaining.delete(seedId);
+    const cluster = [byId.get(seedId)!];
+    for (let i = 0; i < cluster.length; i++) {
+      for (const id of [...remaining]) {
+        const candidate = byId.get(id)!;
+        const lngDelta = Math.abs((((candidate.lng - cluster[i].lng) + 540) % 360) - 180);
+        if (Math.abs(candidate.lat - cluster[i].lat) <= 0.6 && lngDelta <= 0.6) {
+          remaining.delete(id);
+          cluster.push(candidate);
+        }
+      }
+    }
+    if (cluster.length < 2) continue;
+    cluster.sort((a, b) => a.id.localeCompare(b.id));
+    const radius = Math.max(32, 26 / Math.sin(Math.PI / cluster.length));
+    cluster.forEach(({ id }, index) => {
+      const angle = -Math.PI / 2 + (index * 2 * Math.PI) / cluster.length;
+      offsets.set(id, { x: Math.round(Math.cos(angle) * radius), y: Math.round(Math.sin(angle) * radius) });
+    });
+  }
+  return offsets;
+}
+
 export function distanceKm(aLat: number, aLng: number, bLat: number, bLng: number) {
   const dLat = rad(bLat - aLat);
   const dLng = rad(bLng - aLng);

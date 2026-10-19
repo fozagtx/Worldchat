@@ -60,11 +60,13 @@ export default function IncomingCall({ me, peer, onAccept, onDecline }: { me: Pr
         </span>
       </div>
       <div className="incoming-actions">
-        <button className="round end sm" onClick={onDecline} aria-label="Decline">
+        <button className="incoming-action decline" type="button" onClick={onDecline} aria-label="Decline">
           <PhoneDown />
+          Decline
         </button>
-        <button className="round accept sm" onClick={onAccept} aria-label="Accept">
+        <button className="incoming-action accept" type="button" onClick={onAccept} aria-label="Accept">
           <Phone />
+          Accept
         </button>
       </div>
     </div>

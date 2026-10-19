@@ -2,9 +2,9 @@ import type { Peer, Profile } from "../lib/protocol";
 import type { ConnState } from "../lib/presence";
 import Avatar from "./Avatar";
 import Flag from "./Flag";
-import { Logo } from "./icons";
+import { Logo, Music, MusicOff } from "./icons";
 
-export function TopBar({ me, conn, onEdit }: { me: Profile; conn: ConnState; onEdit: () => void }) {
+export function TopBar({ me, conn, lofiOn, onToggleLofi, onEdit }: { me: Profile; conn: ConnState; lofiOn: boolean; onToggleLofi: () => void; onEdit: () => void }) {
   return (
     <header className="topbar">
       <span className="brand">
@@ -14,6 +14,10 @@ export function TopBar({ me, conn, onEdit }: { me: Profile; conn: ConnState; onE
       <span className={`live-chip mono ${conn}`}>
         <i /> {conn === "online" ? "LIVE" : conn === "connecting" ? "CONNECTING" : "RECONNECTING"}
       </span>
+      <button className="music-toggle" type="button" onClick={onToggleLofi} aria-pressed={lofiOn}>
+        {lofiOn ? <Music /> : <MusicOff />}
+        {lofiOn ? "Lo-fi on" : "Lo-fi off"}
+      </button>
       <span className="spacer" />
       <button className="me-pill" onClick={onEdit} title="Edit your profile">
         <Avatar seed={me.avatar} size={28} />

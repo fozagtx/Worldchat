@@ -1,9 +1,10 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import { geoEquirectangular, geoGraticule10, geoInterpolate, geoOrthographic, geoPath } from "d3-geo";
 import { feature } from "topojson-client";
 import land110 from "world-atlas/land-110m.json";
 import type { Peer, Profile } from "../lib/protocol";
 import { avatarUrl } from "../lib/identity";
+import { fanOutOffsets } from "../lib/geo";
 
 import type { GlobeHandle } from "./MapGlobe";
 
@@ -57,13 +58,27 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const markers = useRef(new Map<string, HTMLButtonElement>());
-  const rot = useRef<[number, number]>([me ? -me.lng : -10, me ? -Math.max(-35, Math.min(35, me.lat)) : -15]);
+  const rot = useRef<[number, number]>([me ? -me.lng : -10, me ? -me.lat : -15]);
+  const centeredAt = useRef<{ lat: number; lng: number } | null>(me ? { lat: me.lat, lng: me.lng } : null);
   const anim = useRef<{ from: [number, number]; to: [number, number]; t0: number } | null>(null);
   const drag = useRef<{ x: number; y: number; r: [number, number] } | null>(null);
+  const pointers = useRef(new Map<number, [number, number]>());
+  const pinch = useRef<{ distance: number; zoom: number } | null>(null);
   const idleAt = useRef(0);
   const zoom = useRef(1);
-  const props = useRef({ me, peers, arcTo, offsetX, offsetY });
-  props.current = { me, peers, arcTo, offsetX, offsetY };
+  const initialPeerIds = useRef(new Set<string>());
+  const latePeerIds = useRef(new Set<string>());
+  if (revealed) {
+    for (const peer of peers) if (!initialPeerIds.current.has(peer.id)) latePeerIds.current.add(peer.id);
+  } else {
+    for (const peer of peers) initialPeerIds.current.add(peer.id);
+  }
+  const pinOffsets = useMemo(
+    () => fanOutOffsets([...(me ? [{ id: "me", lat: me.lat, lng: me.lng }] : []), ...peers.map(({ id, lat, lng }) => ({ id, lat, lng }))]),
+    [me, peers],
+  );
+  const props = useRef({ me, peers, arcTo, offsetX, offsetY, pinOffsets });
+  props.current = { me, peers, arcTo, offsetX, offsetY, pinOffsets };
 
   useImperativeHandle(ref, () => ({
     focus(lat, lng) {
@@ -71,10 +86,30 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
       let target = -lng;
       while (target - l0 > 180) target -= 360;
       while (target - l0 < -180) target += 360;
-      anim.current = { from: [l0, p0], to: [target, -Math.max(-50, Math.min(50, lat))], t0: performance.now() };
+      anim.current = { from: [l0, p0], to: [target, -lat], t0: performance.now() };
+      idleAt.current = performance.now() + 6000;
+    },
+    locate(lat, lng) {
+      const [l0, p0] = rot.current;
+      let target = -lng;
+      while (target - l0 > 180) target -= 360;
+      while (target - l0 < -180) target += 360;
+      anim.current = { from: [l0, p0], to: [target, -lat], t0: performance.now() };
+      zoom.current = 1;
       idleAt.current = performance.now() + 6000;
     },
   }));
+
+  useEffect(() => {
+    if (!me || (centeredAt.current?.lat === me.lat && centeredAt.current.lng === me.lng)) return;
+    const [l0, p0] = rot.current;
+    let target = -me.lng;
+    while (target - l0 > 180) target -= 360;
+    while (target - l0 < -180) target += 360;
+    anim.current = { from: [l0, p0], to: [target, -me.lat], t0: performance.now() };
+    centeredAt.current = { lat: me.lat, lng: me.lng };
+    idleAt.current = performance.now() + 6000;
+  }, [me?.lat, me?.lng]);
 
   useEffect(() => {
     const cv = canvas.current!, el = wrap.current!;
@@ -98,7 +133,7 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
     ro.observe(el);
 
     const frame = (now: number) => {
-      const { me, peers, arcTo, offsetX, offsetY } = props.current;
+      const { me, peers, arcTo, offsetX, offsetY, pinOffsets } = props.current;
       const gk = grow.current.on ? Math.min(1, (now - grow.current.t0) / 2200) : 0;
       const scale = 0.04 + 0.96 * (1 - Math.pow(1 - gk, 4));
       if (anim.current) {
@@ -178,13 +213,13 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
       const place = (id: string, lng: number, lat: number) => {
         const m = markers.current.get(id);
         if (!m) return;
+        const offset = pinOffsets.get(id) ?? { x: 0, y: 0 };
         const la = (lat * Math.PI) / 180, lo = (lng * Math.PI) / 180;
         const dot = Math.cos(la) * Math.cos(lo) * vx + Math.cos(la) * Math.sin(lo) * vy + Math.sin(la) * vz;
         const p = proj([lng, lat]);
-        const vis = dot > 0.05 && p;
-        m.style.opacity = vis ? String(Math.min(1, dot * 3)) : "0";
-        m.style.pointerEvents = vis ? "auto" : "none";
-        if (p) m.style.transform = `translate(${p[0]}px, ${p[1]}px) translate(-50%, -50%) scale(${0.8 + Math.max(0, dot) * 0.2})`;
+        m.style.opacity = p ? (dot > 0.05 ? String(Math.min(1, dot * 3)) : "0.42") : "0";
+        m.style.pointerEvents = p ? "auto" : "none";
+        if (p) m.style.transform = `translate(${p[0] + offset.x}px, ${p[1] + offset.y}px) translate(-50%, -50%) scale(${0.8 + Math.max(0, dot) * 0.2})`;
       };
       if (me) place("me", me.lng, me.lat);
       for (const p of peers) place(p.id, p.lng, p.lat);
@@ -199,22 +234,40 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
 
   const onDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest("button")) return;
-    drag.current = { x: e.clientX, y: e.clientY, r: [...rot.current] as [number, number] };
+    pointers.current.set(e.pointerId, [e.clientX, e.clientY]);
     anim.current = null;
+    if (pointers.current.size >= 2) {
+      const [a, b] = [...pointers.current.values()];
+      pinch.current = { distance: Math.max(1, Math.hypot(a[0] - b[0], a[1] - b[1])), zoom: zoom.current };
+      drag.current = null;
+    } else {
+      drag.current = { x: e.clientX, y: e.clientY, r: [...rot.current] as [number, number] };
+    }
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
   const onMove = (e: React.PointerEvent) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, [e.clientX, e.clientY]);
+    if (pointers.current.size >= 2 && pinch.current) {
+      const [a, b] = [...pointers.current.values()];
+      const distance = Math.max(1, Math.hypot(a[0] - b[0], a[1] - b[1]));
+      zoom.current = Math.max(0.7, Math.min(8, pinch.current.zoom * (distance / pinch.current.distance)));
+      return;
+    }
     const d = drag.current;
     if (!d) return;
     const k = 0.28 / zoom.current;
     rot.current = [d.r[0] + (e.clientX - d.x) * k, Math.max(-70, Math.min(70, d.r[1] - (e.clientY - d.y) * k))];
   };
-  const onUp = () => {
-    drag.current = null;
+  const onUp = (e: React.PointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    pinch.current = null;
+    const remaining = [...pointers.current.values()][0];
+    drag.current = remaining ? { x: remaining[0], y: remaining[1], r: [...rot.current] as [number, number] } : null;
     idleAt.current = performance.now() + 4000;
   };
   const onWheel = (e: React.WheelEvent) => {
-    zoom.current = Math.max(0.7, Math.min(2.4, zoom.current * (e.deltaY > 0 ? 0.92 : 1.08)));
+    zoom.current = Math.max(0.7, Math.min(8, zoom.current * (e.deltaY > 0 ? 0.92 : 1.08)));
   };
 
   const setRef = (id: string) => (node: HTMLButtonElement | null) => {
@@ -235,7 +288,7 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
         <button
           key={p.id}
           ref={setRef(p.id)}
-          className={`pin fb ${selectedId === p.id ? "is-selected" : ""} ${p.status === "busy" ? "is-busy" : ""} ${p.status === "matching" ? "is-matching" : ""}`}
+          className={`pin fb ${latePeerIds.current.has(p.id) ? "pin-late" : ""} ${selectedId === p.id ? "is-selected" : ""} ${p.status === "busy" ? "is-busy" : ""} ${p.status === "matching" ? "is-matching" : ""}`}
           onClick={(e) => {
             e.stopPropagation();
             onSelect(p.id);

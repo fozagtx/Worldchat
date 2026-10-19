@@ -3,10 +3,11 @@ import maplibregl, { type Map as MlMap, type StyleSpecification } from "maplibre
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Peer, Profile } from "../lib/protocol";
 import { avatarUrl } from "../lib/identity";
-import { greatCircle } from "../lib/geo";
+import { fanOutOffsets, greatCircle } from "../lib/geo";
 
 export interface GlobeHandle {
   focus: (lat: number, lng: number) => void;
+  locate: (lat: number, lng: number) => void;
 }
 
 interface Props {
@@ -81,15 +82,20 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
   const arcAnim = useRef<{ key: string; t0: number } | null>(null);
+  const initialView = useRef(false);
   const targetZoom = () => (window.innerWidth < 760 ? 1.0 : 1.95);
-  const latest = useRef({ me, peers, selectedId, arcTo });
-  latest.current = { me, peers, selectedId, arcTo };
+  const latest = useRef({ me, peers, selectedId, arcTo, padding, revealed });
+  latest.current = { me, peers, selectedId, arcTo, padding, revealed };
 
   useImperativeHandle(ref, () => ({
     focus(lat, lng) {
       idleUntil.current = performance.now() + 9000;
       // BFCM-style: swoop in and tilt so the person sits on the horizon
       map.current?.flyTo({ center: [lng, lat - 3], zoom: Math.max(map.current.getZoom(), 2.6), pitch: 32, bearing: 0, duration: 1800, curve: 1.6, essential: true });
+    },
+    locate(lat, lng) {
+      idleUntil.current = performance.now() + 9000;
+      map.current?.flyTo({ center: [lng, lat], zoom: targetZoom(), pitch: 0, bearing: 0, duration: 1200, essential: true });
     },
   }));
 
@@ -109,17 +115,19 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
         cls: `${busy ? "is-busy" : ""} ${p.status === "matching" ? "is-matching" : ""} ${selectedId === p.id ? "is-selected" : ""}`,
       });
     }
+    const offsets = fanOutOffsets([...want].map(([id, p]) => ({ id, lat: p.lat, lng: p.lng })));
     for (const [id, mk] of markers.current) if (!want.has(id)) (mk.remove(), markers.current.delete(id));
     for (const [id, w] of want) {
       let mk = markers.current.get(id);
       if (!mk) {
         const el = markerEl("");
+        if (id !== "me" && latest.current.revealed) el.classList.add("pin-late");
         if (id !== "me")
           el.addEventListener("click", (e) => {
             e.stopPropagation();
             onSelectRef.current(id);
           });
-        mk = new maplibregl.Marker({ element: el, anchor: "center", opacityWhenCovered: "0" }).setLngLat([w.lng, w.lat]).addTo(m);
+        mk = new maplibregl.Marker({ element: el, anchor: "center", opacityWhenCovered: "0.42" }).setLngLat([w.lng, w.lat]).addTo(m);
         markers.current.set(id, mk);
       }
       mk.setLngLat([w.lng, w.lat]);
@@ -127,6 +135,8 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
       el.classList.remove("is-busy", "is-matching", "is-selected", "pin-me");
       el.classList.add("pin", ...w.cls.split(/\s+/).filter(Boolean));
       if (id === "me") el.classList.add("pin-me");
+      const offset = offsets.get(id);
+      el.style.translate = `${offset?.x ?? 0}px ${offset?.y ?? 0}px`;
       const img = el.querySelector<HTMLImageElement>(".pin-face")!;
       const src = avatarUrl(w.seed);
       if (img.src !== src) img.src = src;
@@ -162,7 +172,7 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
         center: start ? [start.lng, Math.max(-30, Math.min(40, start.lat))] : [10, 20],
         zoom: -1.5,
         minZoom: -2,
-        maxZoom: 6,
+        maxZoom: 18,
         attributionControl: { compact: true },
         renderWorldCopies: false,
       });
@@ -207,11 +217,19 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
 
   useEffect(() => {
     const m = map.current;
-    if (!revealed || !m) return;
+    const user = latest.current.me;
+    if (!revealed || !m || !user) return;
+    const firstReveal = !initialView.current;
+    initialView.current = true;
     idleUntil.current = performance.now() + 2600;
-    const c = m.getCenter();
-    m.easeTo({ zoom: targetZoom(), center: [c.lng + 25, c.lat], duration: 2400, easing: (t) => 1 - Math.pow(1 - t, 4) });
-  }, [revealed]);
+    m.easeTo({
+      zoom: firstReveal ? targetZoom() : m.getZoom(),
+      center: [user.lng, user.lat],
+      padding: latest.current.padding,
+      duration: firstReveal ? 2400 : 1000,
+      easing: (t) => 1 - Math.pow(1 - t, 4),
+    });
+  }, [revealed, me?.lat, me?.lng]);
 
   useEffect(() => {
     map.current?.easeTo({ padding, duration: 600 });
