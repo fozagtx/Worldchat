@@ -9,8 +9,10 @@ import PersonCard from "./components/PersonCard";
 import MatchBar from "./components/MatchBar";
 import CallWindow from "./components/CallWindow";
 import IncomingCall from "./components/IncomingCall";
+import ThemePicker from "./components/ThemePicker";
 import { usePresence } from "./lib/presence";
 import { useCall } from "./lib/call";
+import { useTheme } from "./lib/theme";
 import { loadProfile, saveProfile } from "./lib/profile";
 import { setLofiDuck, startLofi, stopLofi } from "./lib/lofi";
 import type { Peer, Profile } from "./lib/protocol";
@@ -41,6 +43,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [lofiOn, setLofiOn] = useState(loadLofiPreference);
+  const [theme, setTheme] = useTheme();
   const lofiGestureStarted = useRef(false);
   const pendingIntent = useRef<"match" | "browse" | null>(null);
   const globe = useRef<GlobeHandle>(null);
@@ -197,6 +200,7 @@ export default function App() {
           selectedId={selectedId}
           arcTo={arcPeer}
           paused={!!selected || inCall}
+          theme={theme}
           revealed={introDone}
           onReady={onMapReady}
           padding={mobile ? { left: 0, right: 0, top: 0, bottom: inCall ? 0 : 160 } : { left: inCall ? 0 : 380, right: inCall ? 440 : 0, top: 0, bottom: 0 }}
@@ -209,6 +213,7 @@ export default function App() {
           peers={presence.peers}
           selectedId={selectedId}
           arcTo={arcPeer}
+          theme={theme}
           revealed={introDone}
           offsetX={mobile || inCall ? 0 : 380}
           offsetY={mobile && !inCall ? 160 : 0}
@@ -223,9 +228,12 @@ export default function App() {
           {!mobile && !selected && !inCall && <ActivityFeed events={presence.activity} />}
           {!inCall && <Ticker peers={presence.peers} onPick={select} />}
           {!inCall && state.phase !== "incoming" && (
-            <button className="locate-btn" type="button" onClick={() => globe.current?.locate(profile.lat, profile.lng)} aria-label="Locate me" title="Locate me">
-              <Locate />
-            </button>
+            <>
+              <ThemePicker theme={theme} onChange={setTheme} />
+              <button className="locate-btn" type="button" onClick={() => globe.current?.locate(profile.lat, profile.lng)} aria-label="Locate me" title="Locate me">
+                <Locate />
+              </button>
+            </>
           )}
           {!inCall && state.phase !== "incoming" && (
             <MatchBar me={profile} matching={matching} others={presence.peers.length} othersMatching={othersMatching} onMatch={presence.match} onCancel={presence.unmatch} />

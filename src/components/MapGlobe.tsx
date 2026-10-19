@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import maplibregl, { type Map as MlMap, type StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Peer, Profile } from "../lib/protocol";
+import type { ThemeId } from "../lib/theme";
 import { avatarUrl } from "../lib/identity";
 import { fanOutOffsets, greatCircle } from "../lib/geo";
 
@@ -15,6 +16,7 @@ interface Props {
   peers: Peer[];
   selectedId: string | null;
   arcTo: Peer | null;
+  theme: ThemeId;
   padding: { left: number; right: number; top: number; bottom: number };
   paused: boolean;
   revealed: boolean;
@@ -35,30 +37,51 @@ const LAND = "#f7f0e5";
 const WATER = "#e4d4bf";
 const INK = "#6b4b35";
 
-async function loadStyle(): Promise<StyleSpecification> {
+async function loadStyle(theme: ThemeId): Promise<StyleSpecification> {
   const res = await fetch("https://tiles.openfreemap.org/styles/positron");
   const style = (await res.json()) as StyleSpecification;
+  const radioBlue = theme === "radio-blue";
   const keep = /^(background|water$|boundary_2|boundary_3|boundary_disputed|label_country|label_city_capital|label_city$|water_name_point_label)/;
   style.layers = style.layers
-    .filter((l) => keep.test(l.id))
+    .filter((l) => keep.test(l.id) && !(radioBlue && l.id === "water"))
     .map((l) => {
       const layer = JSON.parse(JSON.stringify(l));
-      if (layer.type === "background") layer.paint = { "background-color": LAND };
+      if (layer.type === "background") layer.paint = { "background-color": radioBlue ? "#2a12ff" : LAND };
       if (layer.id === "water") layer.paint = { "fill-color": WATER, "fill-antialias": true };
-      if (layer.type === "line") layer.paint = { ...layer.paint, "line-color": "#c8ae92", "line-opacity": 0.85 };
+      if (layer.type === "line") layer.paint = { ...layer.paint, "line-color": radioBlue ? "rgba(255,255,255,0.35)" : "#c8ae92", "line-opacity": 0.85 };
       if (layer.type === "symbol") {
         const water = layer.id.startsWith("water");
         layer.paint = {
-          "text-color": water ? "#a88a6d" : layer.id.startsWith("label_country") ? INK : "#8c6c55",
-          "text-halo-color": water ? WATER : LAND,
-          "text-halo-width": 1.2,
+          "text-color": radioBlue ? "#ffffff" : water ? "#a88a6d" : layer.id.startsWith("label_country") ? INK : "#8c6c55",
+          "text-halo-color": radioBlue ? "rgba(5,7,45,0.92)" : water ? WATER : LAND,
+          "text-halo-width": radioBlue ? 1.8 : 1.2,
         };
         if (layer.id.startsWith("label_city")) layer.minzoom = 3.2;
       }
       return layer;
     });
+  if (radioBlue) {
+    style.sources["radio-imagery"] = {
+      type: "raster",
+      tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+      tileSize: 256,
+      maxzoom: 18,
+      attribution: "Esri, Maxar, Earthstar Geographics",
+    };
+    const background = style.layers.findIndex((layer) => layer.type === "background");
+    style.layers.splice(background < 0 ? 0 : background + 1, 0, {
+      id: "radio-imagery",
+      type: "raster",
+      source: "radio-imagery",
+      minzoom: 0,
+      maxzoom: 18,
+      paint: { "raster-opacity": 1 },
+    });
+  }
   style.projection = { type: "globe" };
-  style.sky = { "atmosphere-blend": ["interpolate", ["linear"], ["zoom"], 0, 1, 5, 1, 7, 0], "sky-color": "#f4ede3", "horizon-color": "#efe2cf", "fog-color": "#f4ede3" } as StyleSpecification["sky"];
+  style.sky = radioBlue
+    ? { "atmosphere-blend": ["interpolate", ["linear"], ["zoom"], 0, 1, 5, 1, 7, 0], "sky-color": "#2a12ff", "horizon-color": "#2a12ff", "fog-color": "#2a12ff" }
+    : { "atmosphere-blend": ["interpolate", ["linear"], ["zoom"], 0, 1, 5, 1, 7, 0], "sky-color": "#f4ede3", "horizon-color": "#efe2cf", "fog-color": "#f4ede3" };
   return style;
 }
 
@@ -69,7 +92,7 @@ function markerEl(cls: string) {
   return el;
 }
 
-const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, selectedId, arcTo, padding, paused, revealed, onReady, onSelect }, ref) {
+const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, selectedId, arcTo, theme, padding, paused, revealed, onReady, onSelect }, ref) {
   const box = useRef<HTMLDivElement>(null);
   const map = useRef<MlMap | null>(null);
   const ready = useRef(false);
@@ -84,8 +107,8 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
   const arcAnim = useRef<{ key: string; t0: number } | null>(null);
   const initialView = useRef(false);
   const targetZoom = () => (window.innerWidth < 760 ? 1.0 : 1.95);
-  const latest = useRef({ me, peers, selectedId, arcTo, padding, revealed });
-  latest.current = { me, peers, selectedId, arcTo, padding, revealed };
+  const latest = useRef({ me, peers, selectedId, arcTo, theme, padding, revealed });
+  latest.current = { me, peers, selectedId, arcTo, theme, padding, revealed };
 
   useImperativeHandle(ref, () => ({
     focus(lat, lng) {
@@ -163,7 +186,9 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
   useEffect(() => {
     let raf = 0;
     let cancelled = false;
-    void loadStyle().then((style) => {
+    void loadStyle(theme).then(async (loadedStyle) => {
+      if (cancelled || !box.current) return;
+      const style = latest.current.theme === theme ? loadedStyle : await loadStyle(latest.current.theme);
       if (cancelled || !box.current) return;
       const start = latest.current.me;
       const m = new maplibregl.Map({
@@ -180,9 +205,17 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
       const ro = new ResizeObserver(() => m.resize());
       ro.observe(box.current);
       m.once("remove", () => ro.disconnect());
+      const ensureArc = () => {
+        if (!m.getSource("arc")) m.addSource("arc", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } } });
+        if (!m.getLayer("arc")) m.addLayer({ id: "arc", type: "line", source: "arc", paint: { "line-color": latest.current.theme === "radio-blue" ? "#5cff8a" : "#b5602f", "line-width": 2.2, "line-dasharray": [1.5, 1.5] }, layout: { "line-cap": "round" } });
+        else m.setPaintProperty("arc", "line-color", latest.current.theme === "radio-blue" ? "#5cff8a" : "#b5602f");
+      };
+      m.on("style.load", () => {
+        ensureArc();
+        if (ready.current) sync();
+      });
       m.on("load", () => {
-        m.addSource("arc", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } } });
-        m.addLayer({ id: "arc", type: "line", source: "arc", paint: { "line-color": "#b5602f", "line-width": 2.2, "line-dasharray": [1.5, 1.5] }, layout: { "line-cap": "round" } });
+        ensureArc();
         ready.current = true;
         sync();
         onReadyRef.current();
@@ -212,6 +245,19 @@ const MapGlobe = forwardRef<GlobeHandle, Props>(function MapGlobe({ me, peers, s
       markers.current.clear();
     };
   }, []);
+
+  useEffect(() => {
+    const m = map.current;
+    if (!m) return;
+    let cancelled = false;
+    void loadStyle(theme).then(async (loadedStyle) => {
+      const style = latest.current.theme === theme ? loadedStyle : await loadStyle(latest.current.theme);
+      if (!cancelled) m.setStyle(style, { diff: false });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [theme]);
 
   useEffect(sync, [me, peers, selectedId, arcTo]);
 

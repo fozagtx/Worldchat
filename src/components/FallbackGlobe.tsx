@@ -3,6 +3,7 @@ import { geoEquirectangular, geoGraticule10, geoInterpolate, geoOrthographic, ge
 import { feature } from "topojson-client";
 import land110 from "world-atlas/land-110m.json";
 import type { Peer, Profile } from "../lib/protocol";
+import type { ThemeId } from "../lib/theme";
 import { avatarUrl } from "../lib/identity";
 import { fanOutOffsets } from "../lib/geo";
 
@@ -13,6 +14,7 @@ interface Props {
   peers: Peer[];
   selectedId: string | null;
   arcTo: Peer | null;
+  theme: ThemeId;
   offsetX: number;
   offsetY: number;
   revealed?: boolean;
@@ -52,7 +54,7 @@ function buildDots(): Dot[] {
   return dots;
 }
 
-const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me, peers, selectedId, arcTo, offsetX, offsetY, revealed = true, onSelect }, ref) {
+const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me, peers, selectedId, arcTo, theme, offsetX, offsetY, revealed = true, onSelect }, ref) {
   const grow = useRef({ t0: 0, on: false });
   if (revealed && !grow.current.on) grow.current = { t0: performance.now(), on: true };
   const wrap = useRef<HTMLDivElement>(null);
@@ -77,8 +79,8 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
     () => fanOutOffsets([...(me ? [{ id: "me", lat: me.lat, lng: me.lng }] : []), ...peers.map(({ id, lat, lng }) => ({ id, lat, lng }))]),
     [me, peers],
   );
-  const props = useRef({ me, peers, arcTo, offsetX, offsetY, pinOffsets });
-  props.current = { me, peers, arcTo, offsetX, offsetY, pinOffsets };
+  const props = useRef({ me, peers, arcTo, theme, offsetX, offsetY, pinOffsets });
+  props.current = { me, peers, arcTo, theme, offsetX, offsetY, pinOffsets };
 
   useImperativeHandle(ref, () => ({
     focus(lat, lng) {
@@ -133,7 +135,7 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
     ro.observe(el);
 
     const frame = (now: number) => {
-      const { me, peers, arcTo, offsetX, offsetY, pinOffsets } = props.current;
+      const { me, peers, arcTo, theme, offsetX, offsetY, pinOffsets } = props.current;
       const gk = grow.current.on ? Math.min(1, (now - grow.current.t0) / 2200) : 0;
       const scale = 0.04 + 0.96 * (1 - Math.pow(1 - gk, 4));
       if (anim.current) {
@@ -154,24 +156,25 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
       ctx.clearRect(0, 0, w, h);
 
       // soft ground shadow
+      const radioBlue = theme === "radio-blue";
       const sh = ctx.createRadialGradient(cx, cy + r * 1.02, r * 0.1, cx, cy + r * 1.02, r * 1.05);
-      sh.addColorStop(0, "rgba(92,60,35,0.16)");
-      sh.addColorStop(1, "rgba(92,60,35,0)");
+      sh.addColorStop(0, radioBlue ? "rgba(0,0,20,0.36)" : "rgba(92,60,35,0.16)");
+      sh.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = sh;
       ctx.beginPath();
       ctx.ellipse(cx, cy + r * 1.02, r * 0.9, r * 0.12, 0, 0, Math.PI * 2);
       ctx.fill();
 
       const g = ctx.createRadialGradient(cx - r * 0.35, cy - r * 0.4, r * 0.1, cx, cy, r);
-      g.addColorStop(0, "#fffaf2");
-      g.addColorStop(0.7, "#f3e8d8");
-      g.addColorStop(1, "#e7d6bf");
+      g.addColorStop(0, radioBlue ? "#23305f" : "#fffaf2");
+      g.addColorStop(0.7, radioBlue ? "#101a42" : "#f3e8d8");
+      g.addColorStop(1, radioBlue ? "#07102f" : "#e7d6bf");
       ctx.fillStyle = g;
       ctx.beginPath();
       path({ type: "Sphere" });
       ctx.fill();
 
-      ctx.strokeStyle = "rgba(120,84,55,0.05)";
+      ctx.strokeStyle = radioBlue ? "rgba(255,255,255,0.13)" : "rgba(120,84,55,0.05)";
       ctx.lineWidth = 1;
       ctx.beginPath();
       path(graticule);
@@ -186,12 +189,12 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
         if (dot <= 0.02) continue;
         const p = proj([d[0], d[1]]);
         if (!p) continue;
-        ctx.fillStyle = `rgba(122,82,52,${0.22 + dot * 0.55})`;
-        const s = (0.9 + dot * 1.1) * ds;
+        ctx.fillStyle = radioBlue ? `rgba(92,255,138,${0.48 + dot * 0.5})` : `rgba(122,82,52,${0.22 + dot * 0.55})`;
+        const s = (radioBlue ? 1.3 + dot * 1.25 : 0.9 + dot * 1.1) * ds;
         ctx.fillRect(p[0] - s / 2, p[1] - s / 2, s, s);
       }
 
-      ctx.strokeStyle = "rgba(122,82,52,0.22)";
+      ctx.strokeStyle = radioBlue ? "rgba(255,255,255,0.26)" : "rgba(122,82,52,0.22)";
       ctx.lineWidth = 1;
       ctx.beginPath();
       path({ type: "Sphere" });
@@ -202,7 +205,7 @@ const FallbackGlobe = forwardRef<GlobeHandle, Props>(function FallbackGlobe({ me
         const coords = Array.from({ length: 65 }, (_, i) => interp(i / 64));
         ctx.setLineDash([5, 6]);
         ctx.lineDashOffset = -now / 40;
-        ctx.strokeStyle = "#b5602f";
+        ctx.strokeStyle = radioBlue ? "#5cff8a" : "#b5602f";
         ctx.lineWidth = 2;
         ctx.beginPath();
         path({ type: "LineString", coordinates: coords });
